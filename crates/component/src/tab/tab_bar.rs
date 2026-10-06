@@ -1,9 +1,10 @@
 use std::{cell::RefCell, rc::Rc};
 
 use gpui::{
-    Anchor, AnyElement, App, Background, Bounds, Edges, ElementId, InteractiveElement, IntoElement,
-    ParentElement, Pixels, RenderOnce, ScrollHandle, SharedString, StatefulInteractiveElement as _,
-    StyleRefinement, Styled, Window, div, prelude::FluentBuilder as _, px,
+    Anchor, AnyElement, App, Background, Bounds, Edges, ElementId, Hsla, InteractiveElement,
+    IntoElement, ParentElement, Pixels, RenderOnce, ScrollHandle, SharedString,
+    StatefulInteractiveElement as _, StyleRefinement, Styled, Window, canvas, div, fill,
+    linear_color_stop, linear_gradient, prelude::FluentBuilder as _, px,
 };
 use gpui_base::spring;
 use rust_i18n::t;
@@ -42,6 +43,7 @@ pub struct TabBar {
     base: gpui_base::Tabs,
     style: StyleRefinement,
     scroll_handle: Option<ScrollHandle>,
+    edge_fade: Option<Hsla>,
     prefix: Option<AnyElement>,
     suffix: Option<AnyElement>,
     children: SmallVec<[Tab; 2]>,
@@ -64,6 +66,7 @@ impl TabBar {
             style: StyleRefinement::default(),
             children: SmallVec::new(),
             scroll_handle: None,
+            edge_fade: None,
             prefix: None,
             suffix: None,
             variant: TabVariant::default(),
@@ -126,6 +129,15 @@ impl TabBar {
     /// [`ScrollHandle`] to request an explicit reveal when needed.
     pub fn track_scroll(mut self, scroll_handle: &ScrollHandle) -> Self {
         self.scroll_handle = Some(scroll_handle.clone());
+        self
+    }
+
+    /// Fade overflowing tabs into the color of the surface behind the bar.
+    ///
+    /// Only edges that hide more tabs are faded. Prefixes, suffixes and the
+    /// overflow menu remain clear, and the fades do not intercept pointer events.
+    pub fn with_edge_fade(mut self, color: impl Into<Hsla>) -> Self {
+        self.edge_fade = Some(color.into());
         self
     }
 
@@ -358,6 +370,18 @@ impl Sizable for TabBar {
 
 impl RenderOnce for TabBar {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let tab_count = self.children.len();
+        let scroll_handle = self.scroll_handle.clone().or_else(|| {
+            self.edge_fade.map(|_| {
+                window
+                    .use_keyed_state((self.id.clone(), "edge-fade-scroll"), cx, |_, _| {
+                        ScrollHandle::new()
+                    })
+                    .read(cx)
+                    .clone()
+            })
+        });
+        let edge_fade = self.edge_fade.zip(scroll_handle.clone());
         let default_gap = match self.size {
             Size::Small | Size::XSmall => px(8.),
             Size::Large => px(16.),
@@ -520,6 +544,7 @@ impl RenderOnce for TabBar {
             .child(
                 h_flex()
                     .id("tabs")
+                    .when(edge_fade.is_some(), |this| this.relative())
                     .flex_1()
                     .min_w_0()
                     .mx(-padding_x)
@@ -544,12 +569,66 @@ impl RenderOnce for TabBar {
                             .gap(gap)
                             .overflow_x_scroll()
                             .lock_scroll_axis()
-                            .when_some(self.scroll_handle, |this, scroll_handle| {
+                            .when_some(scroll_handle, |this, scroll_handle| {
                                 this.track_scroll(&scroll_handle)
                             })
                             .children(rendered_tabs)
                             .when(has_suffix_or_menu, |this| this.child(self.last_empty_space)),
-                    ),
+                    )
+                    .when_some(edge_fade, |this, (color, handle)| {
+                        this.child(
+                            canvas(
+                                |_, _, _| (),
+                                move |bounds: Bounds<Pixels>, (), window, _| {
+                                    // Read after the scroll container's prepaint, so initial
+                                    // layout, resize and explicit reveals work in this frame.
+                                    let offset = handle.offset().x;
+                                    let viewport = handle.bounds();
+                                    let width =
+                                        (window.rem_size() * 1.5).min(bounds.size.width / 2.);
+                                    for leading in [true, false] {
+                                        // Ignore the optional trailing spacer: a fade
+                                        // promises hidden tabs, not hidden empty space.
+                                        let hidden = if leading {
+                                            handle.bounds_for_item(0).is_some_and(|tab| {
+                                                tab.left() + offset < viewport.left() - px(1.)
+                                            })
+                                        } else {
+                                            tab_count
+                                                .checked_sub(1)
+                                                .and_then(|ix| handle.bounds_for_item(ix))
+                                                .is_some_and(|tab| {
+                                                    tab.right() + offset > viewport.right() + px(1.)
+                                                })
+                                        };
+                                        if !hidden {
+                                            continue;
+                                        }
+                                        let mut edge = bounds;
+                                        edge.size.width = width;
+                                        if !leading {
+                                            edge.origin.x = bounds.right() - width;
+                                        }
+                                        let (from, to) = if leading {
+                                            (color, color.opacity(0.))
+                                        } else {
+                                            (color.opacity(0.), color)
+                                        };
+                                        window.paint_quad(fill(
+                                            edge,
+                                            linear_gradient(
+                                                90.,
+                                                linear_color_stop(from, 0.),
+                                                linear_color_stop(to, 1.),
+                                            ),
+                                        ));
+                                    }
+                                },
+                            )
+                            .absolute()
+                            .inset_0(),
+                        )
+                    }),
             )
             .when(self.menu, |this| {
                 this.child(
@@ -705,6 +784,107 @@ mod tests {
 
     struct ScrollHarness {
         scroll_handle: ScrollHandle,
+    }
+
+    struct FadeHarness {
+        handle: ScrollHandle,
+        width: Pixels,
+        clicks: Rc<Cell<usize>>,
+    }
+
+    impl Render for FadeHarness {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            TabBar::new("fading-tabs")
+                .outline()
+                .w(self.width)
+                .with_edge_fade(cx.theme().background)
+                .track_scroll(&self.handle)
+                .children((0..5).map(|ix| {
+                    let clicks = self.clicks.clone();
+                    Tab::new()
+                        .w(px(80.))
+                        .label(format!("Tab {ix}"))
+                        .debug_selector(move || format!("fading-tab-{ix}"))
+                        .on_click(move |_, _, _| clicks.set(clicks.get() + 1))
+                }))
+                .suffix(
+                    div()
+                        .w(px(20.))
+                        .h(px(20.))
+                        .debug_selector(|| "fade-suffix".into()),
+                )
+        }
+    }
+
+    fn painted_fades(cx: &mut gpui::VisualTestContext) -> (usize, usize) {
+        cx.update(|window, cx| {
+            let color = cx.theme().background;
+            let gradient = |leading| {
+                let (from, to) = if leading {
+                    (color, color.opacity(0.))
+                } else {
+                    (color.opacity(0.), color)
+                };
+                linear_gradient(90., linear_color_stop(from, 0.), linear_color_stop(to, 1.))
+            };
+            let quads = window.painted_quads();
+            (
+                quads
+                    .iter()
+                    .filter(|q| q.background == gradient(true))
+                    .count(),
+                quads
+                    .iter()
+                    .filter(|q| q.background == gradient(false))
+                    .count(),
+            )
+        })
+    }
+
+    #[gpui::test]
+    fn edge_fades_follow_layout_scroll_reveal_and_resize_without_blocking_tabs(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(crate::theme::init);
+        let handle = ScrollHandle::new();
+        let clicks = Rc::new(Cell::new(0));
+        let (view, cx) = cx.add_window_view({
+            let handle = handle.clone();
+            let clicks = clicks.clone();
+            move |_, _| FadeHarness {
+                handle,
+                clicks,
+                width: px(220.),
+            }
+        });
+        draw(cx);
+        assert_eq!(
+            painted_fades(cx),
+            (0, 1),
+            "first layout fades only the trailing edge"
+        );
+        // The visible part of the first tab remains clickable beneath the leading fade.
+        handle.set_offset(gpui::point(px(-20.), px(0.)));
+        draw(cx);
+        assert_eq!(painted_fades(cx), (1, 1));
+        let tab = cx.debug_bounds("fading-tab-0").unwrap();
+        cx.simulate_click(gpui::point(px(8.), tab.center().y), Modifiers::default());
+        assert_eq!(clicks.get(), 1);
+        handle.scroll_to_item(4);
+        draw(cx);
+        assert_eq!(
+            painted_fades(cx),
+            (1, 0),
+            "explicit reveal updates fades in the same frame"
+        );
+        let suffix = cx.debug_bounds("fade-suffix").unwrap();
+        assert!(suffix.left() >= handle.bounds().right());
+        view.update(cx, |view, cx| {
+            view.width = px(640.);
+            cx.notify();
+        });
+        draw(cx);
+        assert_eq!(painted_fades(cx), (0, 0), "fitting tabs need no fades");
     }
 
     struct DynamicScrollHarness {

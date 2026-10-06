@@ -142,6 +142,22 @@ TabBar::new("tabs-with-controls")
     .child(Tab::new().label("Settings"))
 ```
 
+### Overflow Edge Fades
+
+Use `with_edge_fade` to soften the clipped ends of a scrolling tab row. Pass the color of the surface behind the bar. An edge fades only while it hides more tabs; prefixes, suffixes and menu buttons stay clear. The fades do not intercept clicks.
+
+```rust
+use gpui_kit::component::ActiveTheme;
+
+TabBar::new("document-tabs")
+    .outline()
+    .with_edge_fade(cx.theme().background)
+    .child(Tab::new().label("Report"))
+    .child(Tab::new().label("Notes"))
+```
+
+Combine it with `track_scroll` when the application needs to reveal a tab programmatically. Otherwise the bar retains its own scroll handle.
+
 ### Disabled Tabs
 
 ```rust

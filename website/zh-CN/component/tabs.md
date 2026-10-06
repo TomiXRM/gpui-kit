@@ -114,6 +114,22 @@ TabBar::new("icon-tabs")
     .child(Tab::default().icon(IconName::Mail).with_variant(TabVariant::Tab))
 ```
 
+### 标签栏两端渐隐
+
+用 `with_edge_fade` 让滚动标签栏的裁切处逐渐淡出，参数传标签栏背后的背景色。只有边缘还藏着标签时才显示渐隐；前缀、后缀和菜单按钮保持清晰。渐隐区域仍能点击标签。
+
+```rust
+use gpui_kit::component::ActiveTheme;
+
+TabBar::new("document-tabs")
+    .outline()
+    .with_edge_fade(cx.theme().background)
+    .child(Tab::new().label("Report"))
+    .child(Tab::new().label("Notes"))
+```
+
+应用需要主动滚动到某个标签时，可以同时使用 `track_scroll`。没有传滚动句柄时，标签栏会保存自己的滚动状态。
+
 ### 前缀和后缀
 
 ```rust
