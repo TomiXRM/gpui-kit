@@ -1,14 +1,21 @@
 name: CI
 on:
   pull_request:
+  workflow_call:
+    inputs:
+      ref:
+        description: Exact revision to validate for a stable backport
+        type: string
+        default: ""
   push:
     branches:
       - main
+      - stable
     tags:
       - "*"
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref_name }}-${{ github.ref_name == 'main' && github.sha || 'anysha' }}
+  group: ${{ github.workflow }}-${{ inputs.ref || github.ref_name }}-${{ github.ref_name == 'main' && github.sha || 'anysha' }}
   cancel-in-progress: true
 
 env:
@@ -31,11 +38,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
       - name: Typo check
         uses: crate-ci/typos@v1.40.0
       - name: Verify published recipe fragments
         run: python3 script/check-ai docs
       - uses: oven-sh/setup-bun@v2
+      - name: Test stable branch automation
+        run: bun test ./script/tests/stable-backport.test.ts
       - name: gpui-pre is pinned exactly
         run: bun script/check-gpui-pin.ts
       - uses: taiki-e/install-action@v2
@@ -49,10 +61,13 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: clippy
-          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-save-if: ${{ github.ref == 'refs/heads/main' && inputs.ref == '' }}
       # Lints every member and, as a side effect, type-checks the example
       # crates that the `test` job leaves out.
       - name: Lint
@@ -63,9 +78,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-save-if: ${{ github.ref == 'refs/heads/main' && inputs.ref == '' }}
       # Replaces the system `ld` on Linux and is a no-op elsewhere.
       - uses: rui314/setup-mold@v1
       - name: Install system dependencies
@@ -96,9 +114,12 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-save-if: ${{ github.ref == 'refs/heads/main' && inputs.ref == '' }}
       # Replaces the system `ld` on Linux and is a no-op elsewhere.
       - uses: rui314/setup-mold@v1
       - name: Install system dependencies
@@ -148,10 +169,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: clippy
-          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-save-if: ${{ github.ref == 'refs/heads/main' && inputs.ref == '' }}
           cache-shared-key: gpui-shell-release
       # Replaces the system `ld` on Linux and is a no-op elsewhere.
       - uses: rui314/setup-mold@v1
@@ -175,10 +199,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: clippy
-          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-save-if: ${{ github.ref == 'refs/heads/main' && inputs.ref == '' }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -215,9 +242,12 @@ jobs:
     runs-on: ${{ matrix.run_on }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-save-if: ${{ github.ref == 'refs/heads/main' && inputs.ref == '' }}
           cache-shared-key: gpui-shell-release
       # Replaces the system `ld` on Linux and is a no-op elsewhere.
       - uses: rui314/setup-mold@v1

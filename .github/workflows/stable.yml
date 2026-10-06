@@ -1,0 +1,106 @@
+name: Stable Branch
+
+on:
+  push:
+    branches: [main]
+  workflow_run:
+    workflows: [Release Crate]
+    types: [completed]
+  workflow_dispatch:
+  # Retry conflicts resolved by earlier backports and reconcile replaced events.
+  schedule:
+    - cron: "23 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stable-branch-maintenance
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      statuses: write
+      actions: read
+    outputs:
+      pr: ${{ steps.batch.outputs.pr }}
+      head: ${{ steps.batch.outputs.head }}
+      base: ${{ steps.batch.outputs.base }}
+      docs: ${{ steps.batch.outputs.docs }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      # Run automation from main, never from a PR or a historical release tag.
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+      - run: gh auth setup-git
+      - name: Reconcile releases and compatible main PRs
+        run: bun script/stable-backport.ts prepare --repo "$REPOSITORY"
+        env:
+          REPOSITORY: ${{ github.repository }}
+      - name: Export the batch revisions
+        id: batch
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const result = JSON.parse(require('fs').readFileSync('.git/stable-backport-result.json', 'utf8'));
+            for (const name of ['pr', 'head', 'base', 'docs']) {
+              core.setOutput(name, String(result[name]));
+            }
+            if (result.conflicts.length) {
+              await core.summary.addHeading('Manual backports needed')
+                .addList(result.conflicts.map(number => `PR #${number}`)).write();
+            }
+
+  # GITHUB_TOKEN-created PRs do not run ordinary PR CI unattended. Call the
+  # existing workflows explicitly, then report their result on the tested SHA.
+  check:
+    needs: prepare
+    if: ${{ needs.prepare.outputs.pr != '' }}
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ needs.prepare.outputs.head }}
+
+  check-docs:
+    needs: prepare
+    if: ${{ needs.prepare.outputs.pr != '' && needs.prepare.outputs.docs == 'true' }}
+    uses: ./.github/workflows/test-docs.yml
+    with:
+      ref: ${{ needs.prepare.outputs.head }}
+
+  merge:
+    needs: [prepare, check, check-docs]
+    if: ${{ always() && !cancelled() && needs.prepare.result == 'success' && needs.prepare.outputs.pr != '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      statuses: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY: ${{ github.repository }}
+      PR: ${{ needs.prepare.outputs.pr }}
+      HEAD_SHA: ${{ needs.prepare.outputs.head }}
+      BASE_SHA: ${{ needs.prepare.outputs.base }}
+      RESULT: ${{ needs.check.result == 'success' && (needs.check-docs.result == 'success' || needs.check-docs.result == 'skipped') && 'success' || 'failure' }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+      - name: Report CI and merge the unchanged, compatible batch
+        run: >-
+          bun script/stable-backport.ts finish --repo "$REPOSITORY"
+          --pr "$PR" --head "$HEAD_SHA" --base "$BASE_SHA"
+          --result "$RESULT" --url "$RUN_URL"

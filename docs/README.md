@@ -11,6 +11,8 @@ rather than project-progress logs.
 - [GPUI Shell](gpui-shell.md) explains the scriptable application runtime built
   on `gpui-base`: the engine seam, the render protocol, call scopes, the object
   model, capabilities and the sandbox, and the measured performance model.
+- [Release branches](RELEASE-BRANCHES.md) defines main/stable ownership,
+  automatic backports, the Breaking Changes label, and release promotion.
 
 For component-level APIs and runnable examples, see the
 [gpui-base documentation](../website/base/index.md).

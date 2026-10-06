@@ -3,6 +3,12 @@
 This file provides shared guidance for coding agents working in this repository.
 Keep project rules here; `CLAUDE.md` imports this file for Claude Code.
 
+## Repository Scripts
+
+Write new repository scripts in TypeScript and run them with Bun. Use `bun:test`
+for their tests. Do not add new Python scripts; existing scripts are not a
+rewrite target solely because they use another language.
+
 ## Canonical Design and Coding Guides
 
 Before changing UI, interaction, interface language, layout, styling,
