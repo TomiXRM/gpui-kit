@@ -1,12 +1,16 @@
 use gpui_base::TestSupportExt as _;
-use std::{rc::Rc, time::Duration};
+use std::rc::Rc;
 
 use gpui::{
-    Animation, AnimationExt as _, AnyElement, App, ClickEvent, DefiniteLength, DismissEvent, Edges,
-    EventEmitter, FocusHandle, InteractiveElement as _, IntoElement, ParentElement, Pixels,
-    RenderOnce, StyleRefinement, Styled, Window, div, prelude::FluentBuilder as _, px,
+    AnyElement, App, ClickEvent, DefiniteLength, DismissEvent, Edges, EventEmitter, FocusHandle,
+    InteractiveElement as _, IntoElement, ParentElement, Pixels, RenderOnce, StyleRefinement,
+    Styled, Window, div, prelude::FluentBuilder as _, px,
 };
-use gpui_base::{ElementExt as _, Sheet as BaseSheet, TextSelectionScopeId, actions::Cancel};
+use gpui_base::{
+    ElementExt as _, Sheet as BaseSheet, TextSelectionScopeId,
+    actions::Cancel,
+    motion::{Keyframe, Keyframes, Timing, animate_keyframes},
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -142,6 +146,20 @@ impl RenderOnce for Sheet {
                 frame_insets.top + frame_insets.bottom,
             );
         let top = cx.theme().sheet.margin_top;
+        let motion = cx.theme().motion_tokens();
+        let frames = Keyframes::try_new([
+            Keyframe::new(0., px(-100.)).ease(motion.easing_move.clone()),
+            Keyframe::new(1., px(0.)),
+        ])
+        .expect("static sheet keyframes are valid");
+        let offset = animate_keyframes(
+            "sheet-enter",
+            &frames,
+            Timing::new(motion.duration_fast),
+            window,
+            cx,
+        )
+        .value;
         let base_size = window.text_style().font_size;
         let rem_size = window.rem_size();
         let mut paddings = Edges::all(px(16.));
@@ -229,19 +247,12 @@ impl RenderOnce for Sheet {
                         .child(footer),
                 )
             })
-            .with_animation(
-                "slide",
-                Animation::new(Duration::from_secs_f64(0.15)),
-                move |this, delta| {
-                    let y = px(-100.) + delta * px(100.);
-                    this.map(|this| match placement {
-                        Placement::Top => this.top(top + y),
-                        Placement::Right => this.right(y),
-                        Placement::Bottom => this.bottom(y),
-                        Placement::Left => this.left(y),
-                    })
-                },
-            );
+            .map(|this| match placement {
+                Placement::Top => this.top(top + offset),
+                Placement::Right => this.right(offset),
+                Placement::Bottom => this.bottom(offset),
+                Placement::Left => this.left(offset),
+            });
         let surface = surface.text_selection_scope(selection_scope);
 
         BaseSheet::new(cx)

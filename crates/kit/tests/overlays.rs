@@ -208,9 +208,8 @@ async fn escape_dismisses_dialog_and_sheet_and_restores_focus(cx: &mut TestAppCo
         window.try_find("sheet-content").is_some()
     })
     .await;
-    // GPUI's non-synced Animation uses std::time::Instant, not the test clock.
-    // Finish the actual 150 ms entrance before asserting its final geometry.
-    std::thread::sleep(Duration::from_millis(160));
+    cx.background_executor.advance_clock(Duration::from_secs(1));
+    cx.run_until_parked();
     cx.update_window(handle.into(), |_, window, cx| {
         window.render_frame(cx);
         let sheet = window.find("sheet-content").bounds();
@@ -387,4 +386,49 @@ async fn alert_dialog_default_buttons_reach_their_dialog_when_focus_was_stolen(
         window.try_find("dialog").is_none()
     })
     .await;
+}
+
+#[gpui_kit::test]
+fn sheet_entrance_uses_the_framework_clock_and_respects_reduced_motion(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    for reduce_motion in [false, true] {
+        cx.update(|cx| cx.set_reduce_motion(reduce_motion));
+        let (handle, _) = common::open_window(cx, Some(size(px(800.), px(700.))), |window, cx| {
+            cx.new(|cx| Workspace {
+                saved: cx.new(|cx| InputState::new(window, cx)),
+                draft: cx.new(|cx| InputState::new(window, cx)),
+            })
+        });
+        for _ in 0..2 {
+            cx.update_window(handle.into(), |_, window, cx| {
+                window.render_frame(cx);
+                window.click("inspect", cx);
+                window.render_frame(cx);
+                let sheet = window.find("sheet-content").bounds();
+                if reduce_motion {
+                    assert!((sheet.right() - window.viewport_size().width).abs() < px(1.));
+                } else {
+                    assert!(sheet.right() > window.viewport_size().width, "{sheet:?}");
+                }
+            })
+            .unwrap();
+            cx.background_executor.advance_clock(Duration::from_secs(1));
+            cx.run_until_parked();
+            cx.update_window(handle.into(), |_, window, cx| {
+                window.render_frame(cx);
+                let sheet = window.find("sheet-content").bounds();
+                assert!((sheet.right() - window.viewport_size().width).abs() < px(1.));
+                assert!(window.find("close").visible());
+                window.click("close", cx);
+                window.render_frame(cx);
+            })
+            .unwrap();
+            cx.run_until_parked();
+            cx.update_window(handle.into(), |_, window, cx| {
+                window.render_frame(cx);
+                assert!(window.try_find("sheet-content").is_none());
+            })
+            .unwrap();
+        }
+    }
 }
