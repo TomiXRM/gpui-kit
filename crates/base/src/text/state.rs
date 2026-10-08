@@ -119,8 +119,10 @@ pub struct TextViewState {
     pub(super) link_click_handler: Option<std::sync::Arc<LinkClickHandlerFn>>,
     pub(super) markdown_extensions: Arc<MarkdownExtensions>,
 
+    pub(super) preserve_selection_on_style_change: bool,
+
     pub(super) is_selecting: bool,
-    /// Logical ranges retained across an explicitly requested resource reflow.
+    /// Logical ranges retained across compatible resource or presentation reflow.
     pub(super) preserve_inline_selection: bool,
     multi_click_selection: Option<TextViewMultiClickSelection>,
     selected_text_override: Option<String>,
@@ -212,6 +214,7 @@ impl TextViewState {
             link_click_handler: None,
             image_source: None,
             markdown_extensions: Arc::default(),
+            preserve_selection_on_style_change: false,
             is_selecting: false,
             preserve_inline_selection: false,
             auto_scroll: AutoScroll::default(),
@@ -255,6 +258,14 @@ impl TextViewState {
     pub fn set_selectable(&mut self, selectable: bool, cx: &mut Context<Self>) {
         self.selectable = selectable;
         cx.notify();
+    }
+
+    /// Retain logical selection when styles or syntax highlighting change,
+    /// default false. Source or parser configuration replacements still
+    /// invalidate selection.
+    pub fn preserve_selection_on_style_change(mut self, preserve: bool) -> Self {
+        self.preserve_selection_on_style_change = preserve;
+        self
     }
 
     /// Set the [`SelectionFormat`], default is [`SelectionFormat::Plain`].
@@ -477,10 +488,14 @@ impl TextViewState {
     /// when the task can outlive this view. This does not reparse the document.
     /// Existing logical selection is retained until the next selection gesture.
     pub fn invalidate_inline_layout(&mut self, cx: &mut Context<Self>) {
+        self.preserve_selection_for_reflow();
+        cx.notify();
+    }
+
+    pub(super) fn preserve_selection_for_reflow(&mut self) {
         self.preserve_inline_selection = true;
         self.compatible_layout_update = true;
         self.invalidate_measured_heights();
-        cx.notify();
     }
 
     fn increment_update(&mut self, text: &str, append: bool, cx: &mut Context<Self>) {
@@ -1027,9 +1042,7 @@ impl Render for TextViewState {
             // ListState invalidates its cached rows for width changes, but does
             // not know that an inherited font or rem change affects offscreen
             // inline metrics. Retain logical selections just as for resources.
-            self.preserve_inline_selection = true;
-            self.compatible_layout_update = true;
-            self.invalidate_measured_heights();
+            self.preserve_selection_for_reflow();
         }
         self.layout_text_style = Some(typography);
         let state = cx.entity();
@@ -1097,7 +1110,11 @@ impl Render for TextViewState {
                         state.selection_adapter.is_part_of_window_selection(cx),
                         state.selection_adapter.has_selection_snapshot(cx),
                         state.is_selecting,
-                        state.compatible_layout_update,
+                        // A measurement prepaint must not consume compatibility
+                        // before the same entity's visible column prepaints.
+                        state.compatible_layout_update
+                            || (state.preserve_selection_on_style_change
+                                && state.preserve_inline_selection),
                     )
                 };
                 let mut revision_changed = false;

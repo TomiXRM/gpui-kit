@@ -82,6 +82,28 @@ fn main() {
 
 If the application already calls `gpui_kit::init(cx)`, do not call `gpui_kit::base::init(cx)` again. The higher-level initializer includes base initialization.
 
+## Retained Rich-Text Selection
+
+Managed Markdown state can opt into retaining its logical selection while
+presentation changes:
+
+```rust
+let body = cx.new(|cx| {
+    gpui_kit::base::text::TextViewState::markdown("# Hello", cx)
+        .preserve_selection_on_style_change(true)
+});
+```
+
+This keeps a completed partial selection and Copy across style, syntax
+highlighting, font and width reflow without retaining stale colors or projecting
+the old pointer rectangle onto different text. The default remains selection
+invalidation on style changes. Replacing the source or parser configuration still
+invalidates selection even when this policy is enabled.
+
+The owning view must retain the state and its painted selection participant.
+This policy does not pin an outer virtual-list row after that row is unmounted.
+
+
 ## Quick Start
 
 Foundation controls can be styled and given children like ordinary GPUI elements:

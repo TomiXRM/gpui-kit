@@ -435,6 +435,238 @@ mod tests {
         (chat, cx)
     }
 
+    const COMPATIBLE_SELECTION_CODE: &str =
+        "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu";
+    const COMPATIBLE_SELECTION_COLOR: u32 = 0x20f0b0;
+    const COPY_SENTINEL: &str = "NO_TEXT_VIEW_COPY";
+
+    struct CompatibleSelectionView {
+        text_view: Entity<TextViewState>,
+        width: Pixels,
+        style: crate::text::TextViewStyle,
+    }
+
+    impl CompatibleSelectionView {
+        fn new(cx: &mut Context<Self>) -> Self {
+            let source = format!("# `{COMPATIBLE_SELECTION_CODE}`");
+            let mut style = crate::text::TextViewStyle::default()
+                .heading_font_size(|_, size| size)
+                .inline_code(gpui::HighlightStyle {
+                    background_color: Some(gpui::rgb(COMPATIBLE_SELECTION_COLOR).into()),
+                    ..Default::default()
+                });
+            style.heading_base_font_size = px(16.);
+            Self {
+                text_view: cx.new(|cx| {
+                    TextViewState::markdown(&source, cx).preserve_selection_on_style_change(true)
+                }),
+                width: px(640.),
+                style,
+            }
+        }
+    }
+
+    impl Render for CompatibleSelectionView {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(
+                div().w(self.width).child(
+                    TextView::new(&self.text_view)
+                        .selectable(true)
+                        .style(self.style.clone()),
+                ),
+            )
+        }
+    }
+
+    fn setup_compatible_selection(
+        cx: &mut TestAppContext,
+    ) -> (Entity<CompatibleSelectionView>, &mut VisualTestContext) {
+        cx.update(crate::init);
+        let (root, cx) = cx.add_window_view(|window, cx| {
+            let view = cx.new(CompatibleSelectionView::new);
+            Root::new(view, window, cx)
+        });
+        let view = root.read_with(cx, |root, _| {
+            root.view()
+                .clone()
+                .downcast::<CompatibleSelectionView>()
+                .unwrap()
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        (view, cx)
+    }
+
+    fn painted_background_bounds(color: u32, cx: &mut VisualTestContext) -> Vec<Bounds<Pixels>> {
+        cx.update(|window, _| {
+            let background: gpui::Background = gpui::rgb(color).into();
+            let scale_factor = window.scale_factor();
+            window
+                .painted_quads()
+                .into_iter()
+                .filter(|quad| quad.background == background)
+                .map(|quad| quad.bounds.map(|value| px(value.0 / scale_factor)))
+                .collect()
+        })
+    }
+
+    fn copy_selection(cx: &mut VisualTestContext) -> String {
+        // TestAppContext's platform owns this clipboard. Poison it for every
+        // dispatch so an unhandled Copy cannot pass using a previous payload.
+        cx.update(|window, cx| {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(COPY_SENTINEL.into()));
+            window.dispatch_action(Box::new(crate::input::Copy), cx);
+        });
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .unwrap_or_default()
+        })
+    }
+
+    fn select_compatible_partial(
+        view: &Entity<CompatibleSelectionView>,
+        cx: &mut VisualTestContext,
+    ) -> (
+        gpui::Point<Pixels>,
+        gpui::Point<Pixels>,
+        String,
+        std::ops::Range<usize>,
+    ) {
+        let backgrounds = painted_background_bounds(COMPATIBLE_SELECTION_COLOR, cx);
+        assert_eq!(backgrounds.len(), 1, "initial inline code must fit one row");
+        let bounds = backgrounds[0];
+        let start = point(bounds.left() + px(20.), bounds.center().y);
+        let end = point(bounds.left() + px(130.), bounds.center().y);
+        drag(cx, start, end);
+        let selected = window_selected_text(cx);
+        assert!(!selected.trim().is_empty(), "real drag must select text");
+        assert_ne!(selected.trim(), COMPATIBLE_SELECTION_CODE);
+        assert!(COMPATIBLE_SELECTION_CODE.contains(selected.trim()));
+        assert_eq!(copy_selection(cx), selected.trim());
+        let range = view.read_with(cx, |view, cx| {
+            let state = view.text_view.read(cx);
+            assert!(!state.is_selecting(), "selection must be ended");
+            state.selected_source_range().expect("partial source range")
+        });
+        assert!(range.start > 3, "selection must start inside the code span");
+        assert!(range.end < COMPATIBLE_SELECTION_CODE.len() + 3);
+        (start, end, selected, range)
+    }
+
+    #[gpui::test]
+    fn opted_in_color_style_change_keeps_finished_partial_selection_and_copy(
+        cx: &mut TestAppContext,
+    ) {
+        const NEW_COLOR: u32 = 0xf020b0;
+        const REPLACEMENT: &str =
+            "omega zulu sigma tango upsilon kilo rho bravo echo victor yankee pi";
+        let (view, cx) = setup_compatible_selection(cx);
+        let (start, end, selected, range) = select_compatible_partial(&view, cx);
+        let old_backgrounds = painted_background_bounds(COMPATIBLE_SELECTION_COLOR, cx);
+        let state = view.read_with(cx, |view, _| view.text_view.clone());
+
+        view.update(cx, |view, cx| {
+            view.style.inline_code.background_color = Some(gpui::rgb(NEW_COLOR).into());
+            cx.notify();
+        });
+        for _ in 0..3 {
+            view.update(cx, |_, cx| cx.notify());
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+            assert_eq!(window_selected_text(cx), selected);
+            assert_eq!(
+                state.read_with(cx, |state, _| state.selected_source_range()),
+                Some(range.clone())
+            );
+            assert_eq!(copy_selection(cx), selected.trim());
+            assert_eq!(painted_background_bounds(NEW_COLOR, cx), old_backgrounds);
+            assert!(painted_background_bounds(COMPATIBLE_SELECTION_COLOR, cx).is_empty());
+        }
+
+        // The policy is presentation-only: a new committed document must not
+        // keep copying the old range, even when the same Entity stays mounted.
+        state.update(cx, |state, cx| {
+            state.set_text(&format!("# `{REPLACEMENT}`"), cx);
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert_eq!(window_selected_text(cx), "");
+        assert!(
+            state
+                .read_with(cx, |state, _| state.selected_source_range())
+                .is_none()
+        );
+        assert!(!cx.update(|window, cx| TextSelection::has_selection(window, cx)));
+        assert_eq!(copy_selection(cx), COPY_SENTINEL);
+
+        drag(cx, start, end);
+        let replacement_selection = window_selected_text(cx);
+        assert!(!replacement_selection.trim().is_empty());
+        assert!(REPLACEMENT.contains(replacement_selection.trim()));
+        assert_ne!(replacement_selection, selected);
+        assert_eq!(copy_selection(cx), replacement_selection.trim());
+    }
+
+    #[gpui::test]
+    fn opted_in_font_and_width_reflow_keeps_logical_partial_selection_not_old_geometry(
+        cx: &mut TestAppContext,
+    ) {
+        let (view, cx) = setup_compatible_selection(cx);
+        let (start, end, selected, range) = select_compatible_partial(&view, cx);
+        let state = view.read_with(cx, |view, _| view.text_view.clone());
+        let before = state.read_with(cx, |state, _| state.bounds());
+        let old_backgrounds = painted_background_bounds(COMPATIBLE_SELECTION_COLOR, cx);
+
+        view.update(cx, |view, cx| {
+            view.width = px(220.);
+            view.style.heading_base_font_size = px(32.);
+            cx.notify();
+        });
+        for _ in 0..3 {
+            view.update(cx, |_, cx| cx.notify());
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+            assert_eq!(window_selected_text(cx), selected);
+            assert_eq!(
+                state.read_with(cx, |state, _| state.selected_source_range()),
+                Some(range.clone())
+            );
+            assert_eq!(copy_selection(cx), selected.trim());
+        }
+        let after = state.read_with(cx, |state, _| state.bounds());
+        assert!(after.size.width < before.size.width);
+        assert!(after.size.height > before.size.height);
+        let backgrounds = painted_background_bounds(COMPATIBLE_SELECTION_COLOR, cx);
+        assert!(backgrounds.len() > 1, "the code must actually wrap");
+        assert!(
+            backgrounds[0].size.height > old_backgrounds[0].size.height * 1.5,
+            "the new font must reach the painted fragments"
+        );
+
+        // Reusing the old coordinates as a *new* real gesture proves the
+        // preserved result could not have come from geometry reprojection.
+        drag(cx, start, end);
+        let reprojected = window_selected_text(cx);
+        assert!(!reprojected.trim().is_empty());
+        assert_ne!(
+            reprojected, selected,
+            "the fixture must distinguish old geometry"
+        );
+        assert_ne!(
+            state.read_with(cx, |state, _| state.selected_source_range()),
+            Some(range)
+        );
+        assert_eq!(copy_selection(cx), reprojected.trim());
+    }
+
     #[gpui::test]
     fn base_plain_selection_and_text_view_share_one_cross_renderer_selection(
         cx: &mut TestAppContext,
