@@ -1103,18 +1103,26 @@ impl Render for TextViewState {
                     has_selection_snapshot,
                     is_selecting,
                     compatible_layout_update,
+                    preserve_width_selection,
                 ) = {
                     let state = state.read(cx);
+                    let has_selection_snapshot = state.selection_adapter.has_selection_snapshot(cx);
+                    let preserve_width_selection = state.preserve_selection_on_style_change
+                        && !state.is_selecting
+                        && state.bounds().size.width != bounds.size.width
+                        && (has_selection_snapshot || state.has_view_selection());
                     (
                         state.bounds().size != bounds.size,
                         state.selection_adapter.is_part_of_window_selection(cx),
-                        state.selection_adapter.has_selection_snapshot(cx),
+                        has_selection_snapshot,
                         state.is_selecting,
                         // A measurement prepaint must not consume compatibility
                         // before the same entity's visible column prepaints.
                         state.compatible_layout_update
+                            || preserve_width_selection
                             || (state.preserve_selection_on_style_change
                                 && state.preserve_inline_selection),
+                        preserve_width_selection,
                     )
                 };
                 let mut revision_changed = false;
@@ -1122,6 +1130,11 @@ impl Render for TextViewState {
                     revision_changed = state
                         .selection_adapter
                         .update_layout_revision(state.selection_revision, state.is_selecting);
+                    if preserve_width_selection {
+                        // ListState already remeasures width changes. Arm logical
+                        // retention before inline paint without invalidating rows again.
+                        state.preserve_inline_selection = true;
+                    }
                     state.update_bounds(bounds, cx);
                     state.compatible_layout_update = false;
                 });

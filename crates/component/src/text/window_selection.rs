@@ -443,6 +443,7 @@ mod tests {
     struct CompatibleSelectionView {
         text_view: Entity<TextViewState>,
         width: Pixels,
+        top_padding: Pixels,
         style: crate::text::TextViewStyle,
     }
 
@@ -461,6 +462,7 @@ mod tests {
                     TextViewState::markdown(&source, cx).preserve_selection_on_style_change(true)
                 }),
                 width: px(640.),
+                top_padding: px(0.),
                 style,
             }
         }
@@ -468,7 +470,7 @@ mod tests {
 
     impl Render for CompatibleSelectionView {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-            div().size_full().child(
+            div().size_full().pt(self.top_padding).child(
                 div().w(self.width).child(
                     TextView::new(&self.text_view)
                         .selectable(true)
@@ -615,7 +617,65 @@ mod tests {
     }
 
     #[gpui::test]
-    fn opted_in_font_and_width_reflow_keeps_logical_partial_selection_not_old_geometry(
+    fn opted_in_width_only_narrowing_keeps_finished_partial_selection_and_copy(
+        cx: &mut TestAppContext,
+    ) {
+        let (view, cx) = setup_compatible_selection(cx);
+        let (_, _, selected, range) = select_compatible_partial(&view, cx);
+        let state = view.read_with(cx, |view, _| view.text_view.clone());
+        let before = state.read_with(cx, |state, _| state.bounds());
+        let old_backgrounds = painted_background_bounds(COMPATIBLE_SELECTION_COLOR, cx);
+
+        // No style/font/parser/source update accompanies this narrower layout.
+        view.update(cx, |view, cx| {
+            view.width = px(100.);
+            cx.notify();
+        });
+        for _ in 0..3 {
+            view.update(cx, |_, cx| cx.notify());
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+            assert_eq!(window_selected_text(cx), selected);
+            assert_eq!(
+                state.read_with(cx, |state, _| state.selected_source_range()),
+                Some(range.clone())
+            );
+            assert_eq!(copy_selection(cx), selected.trim());
+        }
+        let after = state.read_with(cx, |state, _| state.bounds());
+        assert!(after.size.width < before.size.width);
+        assert!(after.size.height > before.size.height);
+        let backgrounds = painted_background_bounds(COMPATIBLE_SELECTION_COLOR, cx);
+        assert!(
+            backgrounds.len() > 1,
+            "width alone must actually wrap the code"
+        );
+        assert_eq!(
+            backgrounds[0].size.height, old_backgrounds[0].size.height,
+            "the painted font size must remain unchanged"
+        );
+
+        // A fresh drag in the wrapped layout replaces the held logical range.
+        let first_row = backgrounds[0];
+        drag(
+            cx,
+            point(first_row.left() + px(1.), first_row.center().y),
+            point(first_row.left() + px(40.), first_row.center().y),
+        );
+        let new_selection = window_selected_text(cx);
+        assert!(!new_selection.trim().is_empty());
+        assert!(COMPATIBLE_SELECTION_CODE.contains(new_selection.trim()));
+        assert_ne!(new_selection, selected);
+        assert_ne!(
+            state.read_with(cx, |state, _| state.selected_source_range()),
+            Some(range)
+        );
+        assert_eq!(copy_selection(cx), new_selection.trim());
+    }
+
+    #[gpui::test]
+    fn opted_in_font_and_width_reflow_then_outer_origin_shift_keeps_logical_partial_selection(
         cx: &mut TestAppContext,
     ) {
         let (view, cx) = setup_compatible_selection(cx);
@@ -651,9 +711,44 @@ mod tests {
             "the new font must reach the painted fragments"
         );
 
-        // Reusing the old coordinates as a *new* real gesture proves the
-        // preserved result could not have come from geometry reprojection.
-        drag(cx, start, end);
+        // Move the mounted consumer from outside TextView only after the font
+        // reflow has settled. Geometry-only snapshot publication must not turn
+        // its held logical range back into the pre-reflow pointer rectangle.
+        let origin_shift = px(48.);
+        view.update(cx, |view, cx| {
+            view.top_padding = origin_shift;
+            cx.notify();
+        });
+        for _ in 0..3 {
+            view.update(cx, |_, cx| cx.notify());
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+            assert_eq!(window_selected_text(cx), selected);
+            assert_eq!(
+                state.read_with(cx, |state, _| state.selected_source_range()),
+                Some(range.clone())
+            );
+            assert_eq!(copy_selection(cx), selected.trim());
+        }
+        let moved = state.read_with(cx, |state, _| state.bounds());
+        assert_eq!(moved.origin, after.origin + point(px(0.), origin_shift));
+        assert_eq!(moved.size, after.size, "only the outer origin must move");
+        let moved_backgrounds = painted_background_bounds(COMPATIBLE_SELECTION_COLOR, cx);
+        assert_eq!(moved_backgrounds.len(), backgrounds.len());
+        for (before, moved) in backgrounds.iter().zip(&moved_backgrounds) {
+            assert_eq!(
+                moved.origin,
+                before.origin + point(px(0.), origin_shift),
+                "the painted fragments must follow the outer layout"
+            );
+            assert_eq!(moved.size, before.size);
+        }
+
+        // Translate the original pointer rectangle into the moved consumer.
+        // As a *new* real gesture in the larger font it selects different bytes.
+        let translation = point(px(0.), origin_shift);
+        drag(cx, start + translation, end + translation);
         let reprojected = window_selected_text(cx);
         assert!(!reprojected.trim().is_empty());
         assert_ne!(

@@ -94,11 +94,16 @@ let body = cx.new(|cx| {
 });
 ```
 
-This keeps a completed partial selection and Copy across style, syntax
-highlighting, font and width reflow without retaining stale colors or projecting
-the old pointer rectangle onto different text. The default remains selection
-invalidation on style changes. Replacing the source or parser configuration still
-invalidates selection even when this policy is enabled.
+The opt-in policy retains the logical byte range of a completed partial selection
+and its Copy payload across style, syntax highlighting, font reflow, and width-only
+reflow. Later outer-layout origin changes do not reinterpret that retained range
+using the old pointer rectangle. New pointer selection gestures still select the
+characters at their current painted positions; presentation continues to repaint
+with current styles rather than retaining stale colors.
+
+The policy is disabled by default, preserving the existing selection invalidation
+behavior. Replacing the source or parser configuration still invalidates selection
+even when this policy is enabled.
 
 The owning view must retain the state and its painted selection participant.
 This policy does not pin an outer virtual-list row after that row is unmounted.
