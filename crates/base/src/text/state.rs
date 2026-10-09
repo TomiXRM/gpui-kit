@@ -119,8 +119,6 @@ pub struct TextViewState {
     pub(super) link_click_handler: Option<std::sync::Arc<LinkClickHandlerFn>>,
     pub(super) markdown_extensions: Arc<MarkdownExtensions>,
 
-    pub(super) preserve_selection_on_style_change: bool,
-
     pub(super) is_selecting: bool,
     /// Logical ranges retained across compatible resource or presentation reflow.
     pub(super) preserve_inline_selection: bool,
@@ -214,7 +212,6 @@ impl TextViewState {
             link_click_handler: None,
             image_source: None,
             markdown_extensions: Arc::default(),
-            preserve_selection_on_style_change: false,
             is_selecting: false,
             preserve_inline_selection: false,
             auto_scroll: AutoScroll::default(),
@@ -258,14 +255,6 @@ impl TextViewState {
     pub fn set_selectable(&mut self, selectable: bool, cx: &mut Context<Self>) {
         self.selectable = selectable;
         cx.notify();
-    }
-
-    /// Retain logical selection when styles or syntax highlighting change,
-    /// default false. Source or parser configuration replacements still
-    /// invalidate selection.
-    pub fn preserve_selection_on_style_change(mut self, preserve: bool) -> Self {
-        self.preserve_selection_on_style_change = preserve;
-        self
     }
 
     /// Set the [`SelectionFormat`], default is [`SelectionFormat::Plain`].
@@ -1107,8 +1096,7 @@ impl Render for TextViewState {
                 ) = {
                     let state = state.read(cx);
                     let has_selection_snapshot = state.selection_adapter.has_selection_snapshot(cx);
-                    let preserve_width_selection = state.preserve_selection_on_style_change
-                        && !state.is_selecting
+                    let preserve_width_selection = !state.is_selecting
                         && state.bounds().size.width != bounds.size.width
                         && (has_selection_snapshot || state.has_view_selection());
                     (
@@ -1120,8 +1108,7 @@ impl Render for TextViewState {
                         // before the same entity's visible column prepaints.
                         state.compatible_layout_update
                             || preserve_width_selection
-                            || (state.preserve_selection_on_style_change
-                                && state.preserve_inline_selection),
+                            || state.preserve_inline_selection,
                         preserve_width_selection,
                     )
                 };

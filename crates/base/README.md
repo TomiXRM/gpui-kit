@@ -84,30 +84,16 @@ If the application already calls `gpui_kit::init(cx)`, do not call `gpui_kit::ba
 
 ## Retained Rich-Text Selection
 
-Managed Markdown state can opt into retaining its logical selection while
-presentation changes:
+Managed `TextViewState` retains completed logical selections and their Copy
+payload across style, syntax-highlighting, font, and width changes by default.
+Current styles and wrapping still apply; an old pointer rectangle is not used to
+reconstruct the selection after reflow. Later outer-layout origin changes also
+preserve the selected text. A new selection gesture or explicit clear replaces
+or clears the selection normally.
 
-```rust
-let body = cx.new(|cx| {
-    gpui_kit::base::text::TextViewState::markdown("# Hello", cx)
-        .preserve_selection_on_style_change(true)
-});
-```
-
-The opt-in policy retains the logical byte range of a completed partial selection
-and its Copy payload across style, syntax highlighting, font reflow, and width-only
-reflow. Later outer-layout origin changes do not reinterpret that retained range
-using the old pointer rectangle. New pointer selection gestures still select the
-characters at their current painted positions; presentation continues to repaint
-with current styles rather than retaining stale colors.
-
-The policy is disabled by default, preserving the existing selection invalidation
-behavior. Replacing the source or parser configuration still invalidates selection
-even when this policy is enabled.
-
-The owning view must retain the state and its painted selection participant.
-This policy does not pin an outer virtual-list row after that row is unmounted.
-
+Replacing the source or Markdown parser configuration still invalidates selection.
+The owning view must retain the state and its painted selection participant; this
+behavior does not pin rows unmounted by an outer virtual list.
 
 ## Quick Start
 

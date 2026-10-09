@@ -672,13 +672,12 @@ impl Element for TextView {
         });
 
         state.update(cx, |state, cx| {
-            if state.preserve_selection_on_style_change
-                && (text_view_style.is_some()
-                    || match (&state.code_block_highlighter, &code_block_highlighter) {
-                        (Some(previous), Some(next)) => !Arc::ptr_eq(previous, next),
-                        (None, None) => false,
-                        _ => true,
-                    })
+            if text_view_style.is_some()
+                || match (&state.code_block_highlighter, &code_block_highlighter) {
+                    (Some(previous), Some(next)) => !Arc::ptr_eq(previous, next),
+                    (None, None) => false,
+                    _ => true,
+                }
             {
                 state.preserve_selection_for_reflow();
             }
@@ -696,9 +695,6 @@ impl Element for TextView {
             state.scrollable = self.scrollable;
             state.max_lines = max_lines;
             if let Some(text_view_style) = text_view_style {
-                if !state.preserve_selection_on_style_change {
-                    state.selection_revision = state.selection_revision.wrapping_add(1);
-                }
                 state.text_view_style = text_view_style;
             }
 
