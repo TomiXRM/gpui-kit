@@ -100,6 +100,23 @@ SelectAll and managed Copy. Width, zoom and style changes invalidate/rebuild
 geometry without changing an unchanged source interval. A changed source or
 Markdown plugin revision is a separate parse/selection event.
 
+### Focused member SelectAll after unmount
+
+A managed post can keep keyboard focus after the virtual list unmounts its
+TextView. The ancestor dispatch fallback serves both Copy and SelectAll for
+that **already focused member**; it does not focus a post or select the whole
+conversation. SelectAll invokes the same selectable-state handler used by the
+mounted TextView and selects that post's complete canonical rendered bytes.
+It does not revive native coordinates or reactivate a retired consumer.
+
+Mounted descendants retain action priority. An enabled Input keeps its normal
+SelectAll/Copy route rather than falling back to the conversation. The ancestor
+installs SelectAll only for managed focus and revalidates the actual focused
+member, live lease, active scope, weak entity and accepted source revision at
+dispatch. Missing authority propagates the action. It reuses the existing
+cached focus lookup and releases Root before the state handler updates logical
+ownership; no new global SelectAll binding or conversation scan is required.
+
 ### Test-platform boundary
 
 The SDK's `logical_selection` and legacy `window_selection`/`text_view` tests
@@ -137,8 +154,51 @@ new argument-count/dead-code warnings; only existing dependency
 future-compatibility notices remained. Exact-source SDK lib plus the same
 13-target configured-2024 format check (`bg_620`) then passed: 334 tests,
 no failures, ignored or filtered cases, bodies 0.07 s; scoped check exit 0, combined
-process 7.33 s. No public SDK revision, post-format native rerun or
-whole-workspace format pass is claimed.
+process 7.33 s. That checkpoint alone did not establish a public SDK revision,
+post-format native rerun or whole-workspace format pass.
+
+### Offscreen SelectAll regression checkpoint
+
+The later `issue_conversation_offscreen_select_all` native consumer first
+physically selects only `PARTIAL` in a multi-paragraph GFM/Unicode post. Bounded
+wheel events remove that post's control witness while another post remains
+visible; physical Copy must still return the original partial selection.
+Physical Cmd-A/C must then produce exactly
+`PARTIAL\n日本語🙂 café code🧭`: the full focused post, without raw Markdown
+or other posts. The fixture uses strong/emphasis markup, not inline code, so
+it does not couple this action regression to Kagi's existing code-span padding
+policy. The rendered literal, physical events, coordinates, unmount witness
+and invariants are unchanged between the corrected Before and After.
+
+PM's corrected Before (`bg_650`) resolved immutable public SDK commit
+`941f20e6c374ea80d2bab9cd08fc96021280db13`: 0 PASS/1 FAIL, copying only
+`PARTIAL`, process 17.40 s (compile 8.97 s). Corrected After (`bg_651`,
+artifact 2322) used the private local SDK integration: **all eleven native
+scenarios passed together**, including the unchanged previous ten and enabled
+Input priority; process 52.63 s (compile 8.48 s). The new scenario checks the
+complete Reply draft and HEAD/staged paths/OIDs/modes/working bytes/refs/stash/
+oplog, with normal cleanup before the final byte oracle. All native Copy
+observations use the runner's private clipboard, not the host clipboard.
+Earlier inline-code fixture runs `bg_647`/`bg_648` remain separate historical
+failures, not the corrected Before/After pair.
+
+Those native results preceded the final three-file formatting pass. PM then
+formatted/checked only `root.rs`, `text/logical_selection.rs` and `text/state.rs`
+with the existing edition/style edition 2024 and `skip_children=true`
+(exit 0, 0.27 s). The post-format complete SDK lib (`bg_653`) passed **334
+tests, 0 failed/ignored/filtered**, bodies 0.06 s, process 11.19 s; UI-lib
+Clippy exited 0 in 4.11 s (combined 15.40 s), with no new warnings and only
+existing `block`/`proc-macro-error2` dependency future-compatibility notices.
+The earlier whole-workspace format baseline FAIL was not rerun or declared
+green; doctests remain disabled.
+
+At this source/documentation freeze, the offscreen SelectAll fix awaits a
+**new normal public SDK commit**.
+Published commit `941f20e6c374ea80d2bab9cd08fc96021280db13` is immutable and
+does not contain this fix. No post-format/public-new-pin native rerun, fresh
+Kagi root gates, default-app Tier B, hosted CI or external review/merge approval
+is established by this SDK checkpoint. Private local integration is test
+provenance, not a final installation recipe.
 
 ## Markdown Plugins
 

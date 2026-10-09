@@ -431,7 +431,7 @@ impl TextViewState {
         self.has_view_selection() || self.selection_points(window, cx).is_some()
     }
 
-    pub(super) fn on_action_select_all(
+    pub(crate) fn on_action_select_all(
         &mut self,
         _: &SelectAll,
         _: &mut Window,

@@ -644,7 +644,11 @@ impl Root {
         }
     }
 
-    fn group_dispatch_focus(&self, window: &Window, cx: &App) -> Option<FocusHandle> {
+    pub(crate) fn group_dispatch_member(
+        &self,
+        window: &Window,
+        cx: &App,
+    ) -> Option<(FocusHandle, Entity<TextViewState>)> {
         let active_scope = self.active_selection_scope();
         let focus = window.focused(cx)?;
         let mut selection = self.logical_selection.state.borrow_mut();
@@ -674,7 +678,7 @@ impl Root {
         if view.read(cx).rendered()?.revision != member.revision {
             return None;
         }
-        Some(focus)
+        Some((focus, view))
     }
 
     pub(crate) fn finish_text_selection_frame(
@@ -1323,7 +1327,7 @@ impl<E: Element> Element for TextSelectionFrame<E> {
     ) -> Self::PrepaintState {
         let mut managed_focus = false;
         if let Some(root) = window.root::<Root>().flatten() {
-            if let Some(focus) = root.read(cx).group_dispatch_focus(window, cx) {
+            if let Some((focus, _)) = root.read(cx).group_dispatch_member(window, cx) {
                 // This is dispatch registration, not a focus change. A visible
                 // descendant registers later and wins GPUI's focus-ID mapping.
                 window.set_focus_handle(&focus, cx);
@@ -1345,7 +1349,7 @@ impl<E: Element> Element for TextSelectionFrame<E> {
         window: &mut Window,
         cx: &mut App,
     ) {
-        Root::register_group_copy_action(paint.1, window, cx);
+        Root::register_group_text_actions(paint.1, window, cx);
         self.0
             .paint(id, inspector, bounds, layout, &mut paint.0, window, cx);
         // Modal children may be deferred until after Root's own paint. Finish

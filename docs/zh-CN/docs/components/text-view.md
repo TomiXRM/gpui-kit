@@ -86,6 +86,21 @@ controller 只有弱引用，真正 unmount 后旧坐标失去 hit 权限。
 SelectAll 和托管 Copy 共用同一遍历。width、zoom 和 style 改变只重建几何，
 不改变未修改的 source 区间；source 或 Markdown plugin revision 改变另行处理。
 
+### 已 unmount 帖子的 SelectAll
+
+虚拟列表 unmount TextView 后，托管帖子仍可保持键盘焦点。祖先 dispatch fallback
+为这个**已经获得焦点的 member**提供 Copy 和 SelectAll，不切换焦点，也不选择整个
+会话。SelectAll 调用 mounted TextView 使用的同一 selectable-state handler，
+选择该帖完整的 canonical rendered bytes；不恢复旧原生坐标或重新激活已撤销 consumer。
+
+mounted descendant 优先消费 action；enabled Input 保留正常 SelectAll/Copy 路由，
+不能落到会话 fallback。祖先只在 managed focus 时安装 SelectAll，并在 dispatch 时
+重验实际 focused member、live lease、active scope、weak entity 与 accepted source
+revision；权限不足就 propagate。复用既有 cached focus lookup，不增 global
+SelectAll binding 或会话扫描，并在 state handler 更新 logical owner 前释放 Root。
+
+### 测试平台边界
+
 SDK 的 `logical_selection` 及旧 `window_selection`/`text_view` 测试不跳过用例。
 Input fixture 明确使用 **disabled** Input，draft/empty clipboard 的精确断言只证明
 该边界。GPUI `TestWindow` 没有 enabled Input 所需的 native input-handler hook；
@@ -111,8 +126,42 @@ UI-lib Clippy exit0，但 private native paint registration 新出现一条参�
 check/compile3.99 s；无新增参数数量/dead-code warning，只剩既有 dependency
 future-compatibility notice。之后 exact-source SDK lib 与相同13目标的configured-2024
 format check（PM `bg_620`）通过：334件、0 failed/ignored/filtered、body0.07 s，
-scoped check exit0，合计process7.33 s。不宣称公开 SDK revision、
+scoped check exit0，合计process7.33 s。该检查点本身未证明公开 SDK revision、
 post-format native 重跑或整个 workspace format 通过。
+
+### 画面外 SelectAll 回归检查点
+
+后续 `issue_conversation_offscreen_select_all` native consumer 先在多段
+GFM/Unicode 帖子中实际拖选 `PARTIAL`。有限次数 wheel 事件让该帖的 control witness
+消失，同时另一帖子仍可见；实际 Copy 仍应返回原部分选择。随后实际 Cmd-A/C 必须精确
+复制 `PARTIAL\n日本語🙂 café code🧭`，即整个 focused post，而非 raw Markdown
+或其他帖子。fixture 使用 strong/emphasis 而非 inline code，避免把该 action 回归与
+Kagi 既有 code-span padding policy 耦合。corrected Before/After 使用同一 rendered
+literal、physical events、coordinates、unmount witness 和 invariants。
+
+PM corrected Before（`bg_650`）真实解析 immutable public SDK commit
+`941f20e6c374ea80d2bab9cd08fc96021280db13`：0 PASS/1 FAIL，只复制 `PARTIAL`，
+process17.40 s（compile8.97 s）。corrected After（`bg_651`、artifact2322）使用
+私有 local SDK integration：**11个 native 场景一起通过**，含完全未变的前10个场景及
+enabled Input priority；process52.63 s（compile8.48 s）。新用例检查完整 Reply draft
+及 HEAD/staged paths/OIDs/modes/working bytes/refs/stash/oplog，并在最终字节断言前
+正常 cleanup。native Copy 观察只使用 runner 的 private clipboard，不是 host clipboard。
+较早 inline-code fixture 的 `bg_647`/`bg_648` 是独立历史失败，不是 corrected 配对。
+
+上述 native 结果在最后三个文件的 formatting 前。随后 PM 只对 `root.rs`、
+`text/logical_selection.rs`、`text/state.rs` 使用原 edition/style edition2024、
+`skip_children=true` format/check：exit0、0.27 s。post-format 完整 SDK lib
+（`bg_653`）**334 PASS、0 failed/ignored/filtered**，body0.06 s、process11.19 s；
+UI-lib Clippy exit0、4.11 s（合计15.40 s），没有新增 warning，仅既有
+`block`/`proc-macro-error2` dependency future-compatibility notice。
+早先整个 workspace format baseline FAIL 未重跑、未宣称 green；doctest 仍禁用。
+
+在此 source/documentation freeze 时，此画面外 SelectAll fix 等待
+**新的正常公开 SDK commit**。已发布
+`941f20e6c374ea80d2bab9cd08fc96021280db13` 不可改写，且不含本 fix。
+此 SDK 检查点不证明 post-format/新公开 pin 的 native 重跑、fresh Kagi root gates、
+default-app Tier B、hosted CI 或外部 review/merge approval。私有 local integration
+仅是测试来源，不是最终安装方法。
 
 ## Markdown 插件
 

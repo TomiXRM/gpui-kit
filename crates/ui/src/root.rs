@@ -2,7 +2,7 @@ use crate::{
     ActiveTheme, ElementExt, Placement, StyledExt,
     dialog::{ANIMATION_DURATION, Dialog},
     focus_trap::FocusTrapManager,
-    input::{Copy, InputState},
+    input::{Copy, InputState, SelectAll},
     native_menu::FallbackMenuOverlay,
     notification::{Notification, NotificationList},
     sheet::Sheet,
@@ -560,7 +560,7 @@ impl Root {
         text
     }
 
-    pub(crate) fn register_group_copy_action(
+    pub(crate) fn register_group_text_actions(
         managed_focus: bool,
         window: &mut Window,
         cx: &mut App,
@@ -593,6 +593,30 @@ impl Root {
             };
             root.update(cx, |root, cx| root.copy_text_selection(true, window, cx));
         });
+        if managed_focus {
+            window.on_action(TypeId::of::<SelectAll>(), |action, phase, window, cx| {
+                if !phase.bubble() {
+                    return;
+                }
+                let Some(action) = action.downcast_ref::<SelectAll>() else {
+                    return;
+                };
+                let Some(root) = window.root::<Root>().flatten() else {
+                    cx.propagate();
+                    return;
+                };
+                // Resolve the actual focused member again at dispatch. Release
+                // Root before its existing state handler updates logical owner.
+                let member = root.read(cx).group_dispatch_member(window, cx);
+                let Some((_, view)) = member else {
+                    cx.propagate();
+                    return;
+                };
+                view.update(cx, |state, cx| {
+                    state.on_action_select_all(action, window, cx)
+                });
+            });
+        }
     }
 
     fn on_action_copy(&mut self, _: &Copy, window: &mut Window, cx: &mut Context<Self>) {
