@@ -666,7 +666,11 @@ mod tests {
                 symbol: "TSLA.US".to_string()
             })
         );
-        assert_eq!(document.text(), "$TSLA.US\n");
+        let mut rendered = crate::text::rendered::RenderedDocument::new(0);
+        for block in &document.blocks {
+            block.visit_rendered_text(&mut |text, state| rendered.push(text, state));
+        }
+        assert_eq!(rendered.text(), "$TSLA.US\n");
         assert_eq!(document.to_markdown(), "$TSLA.US");
     }
 

@@ -28,6 +28,8 @@ pub(super) struct Inline {
     styled_text: StyledText,
 
     state: Arc<Mutex<InlineState>>,
+    source_range: Range<usize>,
+    leaf: Option<super::rendered::RenderedLeaf>,
 }
 
 /// The inline text state, used RefCell to keep the selection state.
@@ -37,6 +39,7 @@ pub(crate) struct InlineState {
     /// The text that actually rendering, matched with selection.
     pub(super) text: SharedString,
     pub(super) selection: Option<Selection>,
+    pub(super) leaf: Option<super::rendered::RenderedLeaf>,
 }
 
 impl InlineState {
@@ -57,6 +60,8 @@ impl Inline {
             .lock()
             .map(|state| state.text.clone())
             .unwrap_or_default();
+        let leaf = state.lock().ok().and_then(|state| state.leaf);
+        let source_range = 0..text.len();
 
         Self {
             id: id.into(),
@@ -65,7 +70,25 @@ impl Inline {
             text: text.clone(),
             styled_text: StyledText::new(text),
             state,
+            source_range,
+            leaf,
         }
+    }
+
+    /// A wrapped fragment retains its original run and rendered UTF-8 range.
+    pub(super) fn fragment(
+        id: impl Into<ElementId>,
+        state: Arc<Mutex<InlineState>>,
+        text: SharedString,
+        source_range: Range<usize>,
+        links: Vec<(Range<usize>, LinkMark)>,
+        highlights: Vec<(Range<usize>, HighlightStyle)>,
+    ) -> Self {
+        let mut inline = Self::new(id, state, links, highlights);
+        inline.styled_text = StyledText::new(text.clone());
+        inline.text = text;
+        inline.source_range = source_range;
+        inline
     }
 
     /// Get link at given mouse position.
@@ -112,6 +135,23 @@ impl Inline {
         let is_selectable = text_view_state.is_selectable();
         if !is_selectable {
             return (false, false, None);
+        }
+        if let Some(root) = window.root::<crate::Root>().flatten() {
+            let root = root.read(cx);
+            if root.logical_selection.contains(text_view_state.entity_id) {
+                let selection = self
+                    .leaf
+                    .and_then(|leaf| {
+                        root.logical_inline_selection(
+                            text_view_state.entity_id,
+                            leaf,
+                            self.source_range.clone(),
+                            GlobalState::global(cx).current_selection_scope(),
+                        )
+                    })
+                    .map(Selection::from);
+                return (true, selection.is_some(), selection);
+            }
         }
 
         if text_view_state.is_all_selected() {
@@ -401,7 +441,23 @@ impl Element for Inline {
         let (is_selectable, is_selection, selection) =
             self.layout_selections(&text_layout, &bounds, window, cx);
 
-        state.selection = selection;
+        // Grouped Copy is exclusively logical. Preserve the pinned ungrouped
+        // collector: only whole-run elements publish a legacy inline range;
+        // wrapped fragments still paint their local range without altering it.
+        let grouped = GlobalState::global(cx)
+            .text_view_state()
+            .is_some_and(|view| {
+                window
+                    .root::<crate::Root>()
+                    .flatten()
+                    .is_some_and(|root| root.read(cx).logical_selection.contains(view.entity_id()))
+            });
+        if !grouped && self.source_range == (0..state.text.len()) {
+            state.selection = selection.as_ref().map(|selection| {
+                (self.source_range.start + selection.start..self.source_range.start + selection.end)
+                    .into()
+            });
+        }
 
         if is_selection || is_selectable {
             window.set_cursor_style(CursorStyle::IBeam, &hitbox);
@@ -413,7 +469,7 @@ impl Element for Inline {
             window.set_cursor_style(CursorStyle::PointingHand, &hitbox);
         }
 
-        if let Some(selection) = &state.selection {
+        if let Some(selection) = &selection {
             Self::paint_selection(selection, &text_layout, &bounds, window, cx);
         }
 
@@ -424,12 +480,28 @@ impl Element for Inline {
                     text_layout.line_height(),
                     window.content_mask().bounds,
                 );
-                crate::Root::register_selectable_text_inline(
-                    &text_view_state,
-                    text_bounds,
-                    window,
-                    cx,
-                );
+                if grouped {
+                    if let (Some(leaf), Some(global_id)) = (self.leaf, global_id) {
+                        crate::Root::register_logical_inline(
+                            global_id,
+                            &text_view_state,
+                            leaf,
+                            self.source_range.clone(),
+                            text_layout.clone(),
+                            text_bounds,
+                            hitbox.clone(),
+                            window,
+                            cx,
+                        );
+                    }
+                } else {
+                    crate::Root::register_selectable_text_inline(
+                        &text_view_state,
+                        text_bounds,
+                        window,
+                        cx,
+                    );
+                }
             }
 
             window.on_mouse_event({
@@ -438,6 +510,9 @@ impl Element for Inline {
                 let inline_state = self.state.clone();
                 let text = self.text.clone();
                 let text_view_state = GlobalState::global(cx).text_view_state().cloned();
+                let leaf = self.leaf;
+                let source_start = self.source_range.start;
+                let whole_run = self.source_range == (0..state.text.len());
 
                 move |event: &MouseDownEvent, phase, window, cx| {
                     if !phase.bubble()
@@ -462,10 +537,27 @@ impl Element for Inline {
                     ) else {
                         return;
                     };
+                    if let (Some(view), Some(leaf), Some(root)) = (
+                        &text_view_state,
+                        leaf,
+                        window.root::<crate::Root>().flatten(),
+                    ) {
+                        let grouped = root.update(cx, |root, cx| {
+                            root.select_logical_leaf_range(
+                                view.entity_id(),
+                                leaf,
+                                source_start + range.start..source_start + range.end,
+                                cx,
+                            )
+                        });
+                        if grouped {
+                            return;
+                        }
+                    }
 
                     let selected_text = text[range.clone()].to_string();
 
-                    if let Ok(mut inline_state) = inline_state.lock() {
+                    if whole_run && let Ok(mut inline_state) = inline_state.lock() {
                         inline_state.selection = Some(range.into());
                     }
                     if let Some(text_view_state) = &text_view_state {

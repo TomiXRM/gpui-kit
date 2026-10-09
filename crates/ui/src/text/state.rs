@@ -75,6 +75,7 @@ pub struct TextViewState {
     format: TextViewFormat,
     text: String,
     revision: usize,
+    pub(super) selection_root: Option<gpui::WeakEntity<crate::Root>>,
     parsed_error: Option<SharedString>,
     tx: Sender<UpdateOptions>,
     _parse_task: Task<()>,
@@ -154,6 +155,7 @@ impl TextViewState {
             parsed_error: None,
             text: text.to_string(),
             revision: 0,
+            selection_root: None,
             tx,
             _parse_task,
             _receive_task,
@@ -234,7 +236,7 @@ impl TextViewState {
     /// Return the selected text.
     pub fn selected_text(&self) -> String {
         if self.select_all {
-            return self.parsed_content.document.text();
+            return self.parsed_content.rendered.text();
         }
 
         if let Some(text) = &self.selected_text_override {
@@ -246,6 +248,10 @@ impl TextViewState {
 
     fn increment_update(&mut self, text: &str, append: bool, cx: &mut Context<Self>) {
         self.revision += 1;
+        if let Some(root) = self.selection_root.as_ref().and_then(|root| root.upgrade()) {
+            let view = self.entity_id;
+            root.update(cx, |root, cx| root.invalidate_logical_post(view, cx));
+        }
         let update_options = UpdateOptions {
             revision: self.revision,
             append,
@@ -291,6 +297,11 @@ impl TextViewState {
         self.bounds = bounds;
     }
 
+    pub(super) fn rendered(&self) -> Option<&super::rendered::RenderedDocument> {
+        (self.parsed_error.is_none() && self.parsed_content.rendered.revision == self.revision)
+            .then_some(self.parsed_content.rendered.as_ref())
+    }
+
     pub(super) fn bounds(&self) -> Bounds<Pixels> {
         self.bounds
     }
@@ -321,6 +332,15 @@ impl TextViewState {
 
     /// Clear the current text selection.
     pub fn clear_selection(&mut self, cx: &mut Context<Self>) {
+        if let Some(root) = self.selection_root.as_ref().and_then(|root| root.upgrade()) {
+            let view = self.entity_id;
+            root.update(cx, |root, cx| root.invalidate_logical_post(view, cx));
+        }
+        self.clear_local_selection(cx);
+    }
+
+    /// Root already owns its lease while clearing participating views.
+    pub(super) fn clear_local_selection(&mut self, cx: &mut Context<Self>) {
         self.reset_selection();
         cx.notify();
     }
@@ -335,6 +355,15 @@ impl TextViewState {
 
     /// Select all rendered text in this view.
     pub fn select_all(&mut self, cx: &mut Context<Self>) {
+        if let Some(root) = self.selection_root.as_ref().and_then(|root| root.upgrade()) {
+            let view = self.entity_id;
+            let rendered = self
+                .rendered()
+                .map(|document| (document.revision, document.len));
+            root.update(cx, |root, cx| {
+                root.select_logical_post(view, rendered, cx);
+            });
+        }
         self.multi_click_selection = None;
         self.selected_text_override = None;
         self.select_all = true;
@@ -380,6 +409,9 @@ impl TextViewState {
             return None;
         }
         let root = window.root::<crate::Root>().flatten()?;
+        if root.read(cx).logical_selection.contains(self.entity_id) {
+            return None;
+        }
         let selection = &root.read(cx).text_selection;
         if let Some(view_id) = selection.single_view() {
             if view_id != self.entity_id {
@@ -390,6 +422,12 @@ impl TextViewState {
     }
 
     pub(crate) fn has_selection(&self, window: &Window, cx: &App) -> bool {
+        if let Some(root) = window.root::<crate::Root>().flatten() {
+            let root = root.read(cx);
+            if root.logical_selection.contains(self.entity_id) {
+                return root.has_logical_selection(cx);
+            }
+        }
         self.has_view_selection() || self.selection_points(window, cx).is_some()
     }
 
@@ -485,8 +523,9 @@ impl Render for TextViewState {
 
 #[derive(Clone, PartialEq, Default)]
 pub(crate) struct ParsedContent {
-    pub(crate) document: ParsedDocument,
+    pub(crate) document: Arc<ParsedDocument>,
     pub(crate) node_cx: node::NodeContext,
+    pub(super) rendered: Arc<super::rendered::RenderedDocument>,
 }
 
 struct UpdateFuture {
@@ -596,7 +635,7 @@ fn parse_content(
 
     let mut source = String::new();
     if options.append
-        && let Some(last_block) = content.document.blocks.pop()
+        && let Some(last_block) = Arc::make_mut(&mut content.document).blocks.pop()
         && let Some(span) = last_block.span()
     {
         node_cx.offset = span.start;
@@ -615,12 +654,17 @@ fn parse_content(
     }?;
 
     if options.append {
-        content.document.source =
-            format!("{}{}", content.document.source, options.pending_text).into();
-        content.document.blocks.extend(new_document.blocks);
+        let document = Arc::make_mut(&mut content.document);
+        document.source = format!("{}{}", document.source, options.pending_text).into();
+        document.blocks.extend(new_document.blocks);
     } else {
-        content.document = new_document;
+        content.document = Arc::new(new_document);
     }
+    let mut rendered = super::rendered::RenderedDocument::new(options.revision);
+    for block in &content.document.blocks {
+        block.visit_rendered_text(&mut |text, state| rendered.push(text, state));
+    }
+    content.rendered = Arc::new(rendered);
 
     Ok(content)
 }

@@ -240,6 +240,9 @@ impl Root {
             return;
         };
         let id = state.entity_id();
+        if root.read(cx).logical_selection.contains(id) {
+            return;
+        }
         let weak = state.downgrade();
         let hitbox = hitbox.clone();
         // Capture the modal scope this view is painting under (set by the
@@ -281,6 +284,9 @@ impl Root {
 
     /// Whether there is an active text selection (window-level or view-local).
     pub(crate) fn has_text_selection(&self, cx: &App) -> bool {
+        if self.has_logical_selection(cx) {
+            return true;
+        }
         if self.text_selection.resolved_points(cx).is_some() {
             return true;
         }
@@ -299,6 +305,9 @@ impl Root {
     /// copy action racing ahead of a pending repaint may observe the previous
     /// selection state.
     pub(crate) fn window_selected_text(&self, cx: &App) -> String {
+        if let Some(text) = self.logical_selected_text(cx) {
+            return text;
+        }
         let resolved = self.text_selection.resolved_points(cx);
         let single_view = self.text_selection.single_view();
         // A window selection lives in exactly one scope (its endpoints are
@@ -309,6 +318,9 @@ impl Root {
 
         let mut items: Vec<(Point<Pixels>, String)> = Vec::new();
         for (id, (view, _, scope)) in self.selectable_text_views.iter() {
+            if self.logical_selection.contains(*id) {
+                continue;
+            }
             let Some(view) = view.upgrade() else { continue };
             let state = view.read(cx);
             let in_window_selection = resolved.is_some()
@@ -345,6 +357,8 @@ impl Root {
 
     /// Clear the window selection and all view-local selections.
     pub fn clear_text_selection(&mut self, cx: &mut Context<Self>) {
+        self.clear_logical_selection(cx);
+        self.clear_group_local_selections(cx);
         let had_window_selection = self.text_selection.anchor.is_some();
         self.text_selection.anchor = None;
         self.text_selection.cursor = None;
@@ -367,7 +381,7 @@ impl Root {
             if had_window_selection || view.read(cx).has_view_selection() {
                 view.update(cx, |state, cx| {
                     state.is_selecting = false;
-                    state.clear_selection(cx);
+                    state.clear_local_selection(cx);
                 });
             }
             true
@@ -389,6 +403,9 @@ impl Root {
         view_id: EntityId,
         cx: &mut Context<Self>,
     ) {
+        if self.logical_selection.contains(view_id) {
+            return;
+        }
         if self.text_selection.is_selecting {
             return;
         }
@@ -403,6 +420,9 @@ impl Root {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.start_logical_selection(position, window, cx) {
+            return;
+        }
         let endpoint = self.text_selection_endpoint(position, window, cx);
         // Components that own their own mouse-down interaction (Input, Button,
         // etc.) set `GlobalState::suppress_text_selection` in their bubble-phase
@@ -436,6 +456,9 @@ impl Root {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.update_logical_selection(position, window, cx) {
+            return;
+        }
         if !self.text_selection.is_selecting {
             return;
         }
@@ -479,6 +502,9 @@ impl Root {
     }
 
     pub(crate) fn end_text_selection(&mut self, cx: &mut Context<Self>) {
+        if self.end_logical_selection(cx) {
+            return;
+        }
         if !self.text_selection.is_selecting {
             return;
         }
@@ -513,7 +539,7 @@ impl Root {
     /// `layer_ix`); otherwise to the active Sheet if one is open; otherwise the
     /// base window. Views registered under a different scope are excluded from
     /// selection (see [`Root::text_selection_endpoint`]).
-    fn active_selection_scope(&self) -> SelectionScope {
+    pub(super) fn active_selection_scope(&self) -> SelectionScope {
         if !self.active_dialogs.is_empty() {
             SelectionScope::Dialog(self.active_dialogs.len() - 1)
         } else if self.active_sheet.is_some() {
@@ -551,7 +577,7 @@ impl Root {
         // Smallest-area wins as a proxy for the innermost (topmost) view when
         // TextViews overlap.
         for (view, hitbox, view_scope) in self.selectable_text_views.values() {
-            if *view_scope != scope {
+            if *view_scope != scope || self.logical_selection.contains(view.entity_id()) {
                 continue;
             }
             if view.upgrade().is_none() {
@@ -593,7 +619,7 @@ impl Root {
         let mut predecessor: Option<(WeakEntity<TextViewState>, Pixels)> = None;
         let mut first: Option<(WeakEntity<TextViewState>, Pixels)> = None;
         for (view, _, view_scope) in self.selectable_text_views.values() {
-            if *view_scope != scope {
+            if *view_scope != scope || self.logical_selection.contains(view.entity_id()) {
                 continue;
             }
             let Some(entity) = view.upgrade() else {
@@ -817,6 +843,14 @@ impl Element for TextSelectionController {
         });
 
         window.on_mouse_event(move |_: &MouseUpEvent, phase, window, cx| {
+            if phase.capture() {
+                // A release consumed by a child must still cancel the scoped
+                // outer edge task. Legacy ungrouped release remains bubble-only.
+                Root::update(window, cx, |root, _, cx| {
+                    root.end_logical_selection(cx);
+                });
+                return;
+            }
             if !phase.bubble() {
                 return;
             }
@@ -838,6 +872,9 @@ impl Element for TextSelectionController {
             // converges, so this is left unhandled.
             let position = window.mouse_position();
             Root::update(window, cx, |root, window, cx| {
+                if root.logical_scroll_pending() {
+                    return;
+                }
                 root.update_text_selection(position, window, cx);
             });
         });

@@ -6,13 +6,16 @@ use crate::{
     native_menu::FallbackMenuOverlay,
     notification::{Notification, NotificationList},
     sheet::Sheet,
-    text::{SelectionScope, TextSelectionController, TextViewState, WindowTextSelection},
+    text::{
+        LogicalSelection, SelectionScope, TextSelectionController, TextSelectionFrame,
+        TextViewState, WindowTextSelection,
+    },
     tooltip::TooltipOverlay,
     window_border,
 };
 use gpui::{
     Anchor, AnyView, App, AppContext, Bounds, ClipboardItem, Context, DefiniteLength, ElementId,
-    Entity, EntityId, FocusHandle, Hitbox, InteractiveElement, IntoElement, KeyBinding,
+    Entity, EntityId, FocusHandle, Focusable, Hitbox, InteractiveElement, IntoElement, KeyBinding,
     ParentElement as _, Pixels, Render, StyleRefinement, Styled, WeakEntity, WeakFocusHandle,
     Window, actions, div, prelude::FluentBuilder as _,
 };
@@ -53,6 +56,7 @@ pub struct Root {
     pending_focus_restore: Option<WeakFocusHandle>,
     /// Window-level text selection state. See `text::window_selection`.
     pub(crate) text_selection: WindowTextSelection,
+    pub(crate) logical_selection: LogicalSelection,
     /// Selectable TextViews registered this frame, keyed by entity id.
     pub(crate) selectable_text_views:
         HashMap<EntityId, (WeakEntity<TextViewState>, Hitbox, SelectionScope)>,
@@ -111,6 +115,7 @@ impl Root {
             bordered: true,
             pending_focus_restore: None,
             text_selection: WindowTextSelection::default(),
+            logical_selection: LogicalSelection::default(),
             selectable_text_views: HashMap::new(),
             selectable_text_inlines: HashMap::new(),
         }
@@ -298,12 +303,16 @@ impl Root {
         ));
         // Opening a modal confines selection to it; drop any background
         // selection so it cannot linger (or be copied) under the modal.
+        self.retire_text_selection_group();
         self.clear_text_selection(cx);
         cx.notify();
     }
 
     fn close_dialog_internal(&mut self) -> Option<FocusHandle> {
         self.focused_input = None;
+        if !self.active_dialogs.is_empty() {
+            self.retire_text_selection_group();
+        }
         self.active_dialogs
             .pop()
             .and_then(|d| d.previous_focused_handle)
@@ -348,6 +357,9 @@ impl Root {
             .active_dialogs
             .first()
             .and_then(|d| d.previous_focused_handle.clone());
+        if !self.active_dialogs.is_empty() {
+            self.retire_text_selection_group();
+        }
         self.active_dialogs.clear();
         if let Some(handle) = previous_focused_handle.and_then(|h| h.upgrade()) {
             window.focus(&handle, cx);
@@ -381,6 +393,7 @@ impl Root {
         });
         // Opening a modal confines selection to it; drop any background
         // selection so it cannot linger (or be copied) under the modal.
+        self.retire_text_selection_group();
         self.clear_text_selection(cx);
         cx.notify();
     }
@@ -394,6 +407,9 @@ impl Root {
             .and_then(|h| h.upgrade())
         {
             window.focus(&previous_handle, cx);
+        }
+        if self.active_sheet.is_some() {
+            self.retire_text_selection_group();
         }
         self.active_sheet = None;
         self.clear_text_selection(cx);
@@ -534,8 +550,72 @@ impl Root {
         window.focus_prev(cx);
     }
 
-    fn on_action_copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
-        let text = self.window_selected_text(cx).trim().to_string();
+    pub(crate) fn trim_text_selection(mut text: String) -> String {
+        let end = text.trim_end().len();
+        text.truncate(end);
+        let start = text.len() - text.trim_start().len();
+        if start > 0 {
+            drop(text.drain(..start));
+        }
+        text
+    }
+
+    pub(crate) fn register_group_copy_action(
+        managed_focus: bool,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        if !window
+            .root::<Root>()
+            .flatten()
+            .is_some_and(|root| root.read(cx).logical_selection.has_active_group())
+        {
+            return;
+        }
+        let mut context = gpui::KeyContext::new_with_defaults();
+        context.add(CONTEXT);
+        if managed_focus {
+            context.add("TextView");
+        }
+        window.set_key_context(context);
+        // The frame's prepaint registered the existing managed focus handle on
+        // this node. Mounted descendants can replace that mapping and their
+        // handlers run first; an unmounted post still has this dispatch path.
+        window.on_action(TypeId::of::<Copy>(), |action, phase, window, cx| {
+            if !phase.bubble() {
+                return;
+            }
+            if action.downcast_ref::<Copy>().is_none() {
+                return;
+            }
+            let Some(root) = window.root::<Root>().flatten() else {
+                return;
+            };
+            root.update(cx, |root, cx| root.copy_text_selection(true, window, cx));
+        });
+    }
+
+    fn on_action_copy(&mut self, _: &Copy, window: &mut Window, cx: &mut Context<Self>) {
+        self.copy_text_selection(false, window, cx);
+    }
+
+    fn copy_text_selection(&self, grouped_only: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .focused_input
+            .as_ref()
+            .is_some_and(|input| input.focus_handle(cx).is_focused(window))
+        {
+            cx.propagate();
+            return;
+        }
+        let text = if grouped_only {
+            // This group-frame listener belongs only to the logical controller;
+            // do not turn an absent/retired range into an ungrouped fallback.
+            self.logical_selected_text(cx).unwrap_or_default()
+        } else {
+            self.window_selected_text(cx)
+        };
+        let text = Self::trim_text_selection(text);
         if text.is_empty() {
             cx.propagate();
             return;
@@ -571,14 +651,15 @@ impl Render for Root {
             .child(self.tooltip_overlay.clone())
             .child(self.native_menu_overlay.clone());
 
-        if self.bordered {
+        let element = if self.bordered {
             window_border()
                 .shadow_size(self.window_shadow_size)
                 .child(inner)
                 .into_any_element()
         } else {
             inner.into_any_element()
-        }
+        };
+        TextSelectionFrame(element).into_any_element()
     }
 }
 

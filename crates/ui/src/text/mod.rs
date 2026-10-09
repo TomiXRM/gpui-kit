@@ -2,8 +2,10 @@ mod document;
 mod format;
 mod inline;
 mod inline_flow;
+mod logical_selection;
 mod markdown_ext;
 mod node;
+mod rendered;
 pub(crate) mod selection;
 mod state;
 mod style;
@@ -12,6 +14,10 @@ mod utils;
 mod window_selection;
 
 use gpui::{App, ElementId, IntoElement, RenderOnce, SharedString, Window};
+pub(crate) use logical_selection::{LogicalSelection, TextSelectionFrame};
+pub use logical_selection::{
+    TextSelectionGroupElement, TextSelectionGroupMarker, TextSelectionGroupRetirement,
+};
 pub use markdown_ext::*;
 pub use state::*;
 pub use style::*;

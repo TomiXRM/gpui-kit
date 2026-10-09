@@ -242,20 +242,18 @@ impl Element for InlineFlow {
                     highlights,
                     ..
                 } => {
-                    let state = match &self.items[item_ix] {
-                        InlineFlowItem::Text {
-                            state,
-                            text: source,
-                            ..
-                        } if source_range == (0..source.len()) => state.clone(),
-                        _ => Arc::new(Mutex::new(InlineState::default())),
+                    let InlineFlowItem::Text { state, .. } = &self.items[item_ix] else {
+                        unreachable!("text fragment must originate in a text run");
                     };
-                    if let Ok(mut state) = state.lock() {
-                        state.set_text(text);
-                    }
-
-                    let mut element =
-                        Inline::new(elements.len(), state, links, highlights).into_any_element();
+                    let mut element = Inline::fragment(
+                        elements.len(),
+                        state.clone(),
+                        text,
+                        source_range,
+                        links,
+                        highlights,
+                    )
+                    .into_any_element();
                     element.prepaint_as_root(
                         bounds.origin + origin,
                         size(

@@ -88,12 +88,6 @@ pub(crate) enum BlockNode {
     Unknown,
 }
 
-#[derive(Clone, Copy)]
-enum BlockTextKind {
-    All,
-    Selected,
-}
-
 impl BlockNode {
     pub(super) fn is_list_item(&self) -> bool {
         matches!(self, Self::ListItem { .. })
@@ -126,49 +120,35 @@ impl BlockNode {
         }
     }
 
-    pub(super) fn text(&self) -> String {
-        self.text_by_kind(BlockTextKind::All)
-    }
-
     pub(super) fn selected_text(&self) -> String {
-        self.text_by_kind(BlockTextKind::Selected)
-    }
-
-    fn text_by_kind(&self, kind: BlockTextKind) -> String {
         let mut text = String::new();
         match self {
             BlockNode::Root { children, .. } => {
-                let block_text = Self::children_text(children, kind);
+                let block_text = Self::children_selected_text(children);
                 if !block_text.is_empty() {
                     text.push_str(&block_text);
                     text.push('\n');
                 }
             }
             BlockNode::Paragraph(paragraph) => {
-                let block_text = match kind {
-                    BlockTextKind::All => paragraph.text(),
-                    BlockTextKind::Selected => paragraph.selected_text(),
-                };
+                let block_text = paragraph.selected_text();
                 if !block_text.is_empty() {
                     text.push_str(&block_text);
                     text.push('\n');
                 }
             }
             BlockNode::Heading { children, .. } => {
-                let block_text = match kind {
-                    BlockTextKind::All => children.text(),
-                    BlockTextKind::Selected => children.selected_text(),
-                };
+                let block_text = children.selected_text();
                 if !block_text.is_empty() {
                     text.push_str(&block_text);
                     text.push('\n');
                 }
             }
             BlockNode::List { children, .. } | BlockNode::ListItem { children, .. } => {
-                text.push_str(&Self::children_text(children, kind));
+                text.push_str(&Self::children_selected_text(children));
             }
             BlockNode::Blockquote { children, .. } => {
-                let block_text = Self::children_text(children, kind);
+                let block_text = Self::children_selected_text(children);
 
                 if !block_text.is_empty() {
                     text.push_str(&block_text);
@@ -180,10 +160,7 @@ impl BlockNode {
                 for row in table.children.iter() {
                     let mut row_texts = vec![];
                     for cell in row.children.iter() {
-                        row_texts.push(match kind {
-                            BlockTextKind::All => cell.children.text(),
-                            BlockTextKind::Selected => cell.children.selected_text(),
-                        });
+                        row_texts.push(cell.children.selected_text());
                     }
                     if !row_texts.is_empty() {
                         block_text.push_str(&row_texts.join(" "));
@@ -197,25 +174,14 @@ impl BlockNode {
                 }
             }
             BlockNode::CodeBlock(code_block) => {
-                let block_text = match kind {
-                    BlockTextKind::All => code_block.text(),
-                    BlockTextKind::Selected => code_block.selected_text(),
-                };
+                let block_text = code_block.selected_text();
                 if !block_text.is_empty() {
                     text.push_str(&block_text);
                     text.push('\n');
                 }
             }
-            BlockNode::Custom(node) => {
-                if let BlockTextKind::All = kind {
-                    let content = node.as_text();
-                    if !content.is_empty() {
-                        text.push_str(content);
-                        text.push('\n');
-                    }
-                }
-            }
             BlockNode::Definition { .. }
+            | BlockNode::Custom(_)
             | BlockNode::Break { .. }
             | BlockNode::HorizontalRule { .. }
             | BlockNode::Unknown { .. } => {}
@@ -224,13 +190,92 @@ impl BlockNode {
         text
     }
 
-    fn children_text(children: &[BlockNode], kind: BlockTextKind) -> String {
+    fn children_selected_text(children: &[BlockNode]) -> String {
         let mut text = String::new();
         for child in children.iter() {
-            text.push_str(&child.text_by_kind(kind));
+            text.push_str(&child.selected_text());
         }
 
         text
+    }
+
+    /// One canonical All-text traversal serves both existing SelectAll and the
+    /// parse-owned logical stream. Separators have no layout leaf.
+    pub(super) fn visit_rendered_text(
+        &self,
+        emit: &mut impl FnMut(SharedString, Option<&Arc<Mutex<InlineState>>>),
+    ) -> bool {
+        let newline = |emit: &mut dyn FnMut(SharedString, Option<&Arc<Mutex<InlineState>>>)| {
+            emit("\n".into(), None);
+        };
+        match self {
+            Self::Root { children, .. } | Self::Blockquote { children, .. } => {
+                let mut nonempty = false;
+                for child in children {
+                    nonempty |= child.visit_rendered_text(emit);
+                }
+                if nonempty {
+                    newline(emit);
+                }
+                nonempty
+            }
+            Self::List { children, .. } | Self::ListItem { children, .. } => {
+                let mut nonempty = false;
+                for child in children {
+                    nonempty |= child.visit_rendered_text(emit);
+                }
+                nonempty
+            }
+            Self::Paragraph(paragraph)
+            | Self::Heading {
+                children: paragraph,
+                ..
+            } => {
+                let nonempty = paragraph.visit_rendered_text(emit);
+                if nonempty {
+                    newline(emit);
+                }
+                nonempty
+            }
+            Self::Table(table) => {
+                let mut nonempty = false;
+                for row in &table.children {
+                    for (ix, cell) in row.children.iter().enumerate() {
+                        if ix > 0 {
+                            emit(" ".into(), None);
+                        }
+                        cell.children.visit_rendered_text(emit);
+                    }
+                    if !row.children.is_empty() {
+                        newline(emit);
+                        nonempty = true;
+                    }
+                }
+                if nonempty {
+                    newline(emit);
+                }
+                nonempty
+            }
+            Self::CodeBlock(code) => {
+                let text = code.code();
+                let nonempty = !text.is_empty();
+                emit(text, Some(&code.state));
+                if nonempty {
+                    newline(emit);
+                }
+                nonempty
+            }
+            Self::Custom(node) => {
+                let text = node.as_text();
+                if text.is_empty() {
+                    return false;
+                }
+                emit(text.to_string().into(), None);
+                newline(emit);
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Synchronously clear the selection stored in every inline state.
@@ -487,6 +532,24 @@ impl Paragraph {
         text
     }
 
+    fn visit_rendered_text(
+        &self,
+        emit: &mut impl FnMut(SharedString, Option<&Arc<Mutex<InlineState>>>),
+    ) -> bool {
+        let mut text = String::new();
+        let mut nonempty = false;
+        for node in &self.children {
+            text.push_str(&node.text);
+            if node.image.is_some() {
+                nonempty |= !text.is_empty();
+                emit(std::mem::take(&mut text).into(), Some(&node.state));
+            }
+        }
+        nonempty |= !text.is_empty();
+        emit(text.into(), Some(&self.state));
+        nonempty
+    }
+
     /// Synchronously clear the selection stored in every inline state.
     ///
     /// Mirrors the [`selected_text`](Self::selected_text) traversal.
@@ -605,8 +668,12 @@ impl Paragraph {
 #[derive(Debug, Clone)]
 pub struct CodeBlock {
     lang: Option<SharedString>,
-    styles: Arc<Mutex<Option<Vec<(Range<usize>, HighlightStyle)>>>>,
-    highlight_theme: Arc<HighlightTheme>,
+    styles: Arc<
+        Mutex<(
+            Arc<HighlightTheme>,
+            Option<Vec<(Range<usize>, HighlightStyle)>>,
+        )>,
+    >,
     state: Arc<Mutex<InlineState>>,
     pub span: Option<Span>,
 }
@@ -644,14 +711,16 @@ impl CodeBlock {
 
         Self {
             lang,
-            styles: Arc::new(Mutex::new(None)),
-            highlight_theme: Arc::new(highlight_theme.clone()),
+            styles: Arc::new(Mutex::new((Arc::new(highlight_theme.clone()), None))),
             state,
             span: span.map(|s| s.into()),
         }
     }
 
-    pub(crate) fn styles(&self) -> Vec<(Range<usize>, HighlightStyle)> {
+    pub(crate) fn styles(
+        &self,
+        theme: &Arc<HighlightTheme>,
+    ) -> Vec<(Range<usize>, HighlightStyle)> {
         let Some(lang) = &self.lang else {
             return Vec::new();
         };
@@ -659,8 +728,12 @@ impl CodeBlock {
         let Ok(mut styles) = self.styles.lock() else {
             return Vec::new();
         };
+        if !Arc::ptr_eq(&styles.0, theme) {
+            styles.0 = theme.clone();
+            styles.1 = None;
+        }
 
-        if let Some(styles) = styles.as_ref() {
+        if let Some(styles) = styles.1.as_ref() {
             return styles.clone();
         }
 
@@ -691,9 +764,9 @@ impl CodeBlock {
             };
 
             highlighter.update(Some(edit), &code_rope, None);
-            highlighter.styles(&(0..code.len()), &self.highlight_theme)
+            highlighter.styles(&(0..code.len()), theme)
         });
-        *styles = Some(computed_styles.clone());
+        styles.1 = Some(computed_styles.clone());
         computed_styles
     }
 
@@ -705,13 +778,6 @@ impl CodeBlock {
             text.push_str(&state.text[selection.start..selection.end]);
         }
         text
-    }
-
-    pub(super) fn text(&self) -> String {
-        self.state
-            .lock()
-            .map(|state| state.text.to_string())
-            .unwrap_or_default()
     }
 
     /// Synchronously clear the selection stored in the inline state.
@@ -748,7 +814,7 @@ impl CodeBlock {
                         "code",
                         self.state.clone(),
                         vec![],
-                        self.styles(),
+                        self.styles(&cx.theme().highlight_theme),
                     ))
                     .when_some(node_cx.code_block_actions.clone(), |this, actions| {
                         this.child(
@@ -808,7 +874,7 @@ impl Paragraph {
 
         let mut child_nodes: Vec<AnyElement> = vec![];
 
-        let mut text = String::new();
+        // Rendered run text was prepared when the source was accepted.
         let mut highlights: Vec<(Range<usize>, HighlightStyle)> = vec![];
         let mut links: Vec<(Range<usize>, LinkMark)> = vec![];
         let mut offset = 0;
@@ -816,13 +882,13 @@ impl Paragraph {
         let mut ix = 0;
         for inline_node in children {
             let text_len = inline_node.text.len();
-            text.push_str(&inline_node.text);
 
             if let Some(image) = &inline_node.image {
-                if text.len() > 0 {
-                    if let Ok(mut state) = inline_node.state.lock() {
-                        state.set_text(text.clone().into());
-                    }
+                if inline_node
+                    .state
+                    .lock()
+                    .is_ok_and(|state| !state.text.is_empty())
+                {
                     child_nodes.push(
                         Inline::new(
                             ix,
@@ -854,7 +920,6 @@ impl Paragraph {
                         .into_any_element(),
                 );
 
-                text.clear();
                 links.clear();
                 highlights.clear();
                 offset = 0;
@@ -916,10 +981,7 @@ impl Paragraph {
         }
 
         // Add the last text node
-        if text.len() > 0 {
-            if let Ok(mut state) = self.state.lock() {
-                state.set_text(text.into());
-            }
+        if self.state.lock().is_ok_and(|state| !state.text.is_empty()) {
             child_nodes
                 .push(Inline::new(ix, self.state.clone(), links, highlights).into_any_element());
         }
@@ -938,23 +1000,23 @@ impl Paragraph {
 
     fn inline_flow_items(&self, node_cx: &NodeContext, cx: &mut App) -> Vec<InlineFlowItem> {
         let mut items = Vec::new();
-        let mut text = String::new();
         let mut highlights: Vec<(Range<usize>, HighlightStyle)> = vec![];
         let mut links: Vec<(Range<usize>, LinkMark)> = vec![];
         let mut offset = 0;
 
         for inline_node in &self.children {
             let text_len = inline_node.text.len();
-            text.push_str(&inline_node.text);
 
             if let Some(image) = &inline_node.image {
+                let text = inline_node
+                    .state
+                    .lock()
+                    .map(|state| state.text.clone())
+                    .unwrap_or_default();
                 if !text.is_empty() {
-                    if let Ok(mut state) = inline_node.state.lock() {
-                        state.set_text(text.clone().into());
-                    }
                     items.push(InlineFlowItem::Text {
                         state: inline_node.state.clone(),
-                        text: text.clone().into(),
+                        text,
                         links: links.clone(),
                         highlights: highlights.clone(),
                     });
@@ -968,7 +1030,6 @@ impl Paragraph {
                     height: image.height,
                 });
 
-                text.clear();
                 links.clear();
                 highlights.clear();
                 offset = 0;
@@ -1027,13 +1088,15 @@ impl Paragraph {
             }
         }
 
+        let text = self
+            .state
+            .lock()
+            .map(|state| state.text.clone())
+            .unwrap_or_default();
         if !text.is_empty() {
-            if let Ok(mut state) = self.state.lock() {
-                state.set_text(text.clone().into());
-            }
             items.push(InlineFlowItem::Text {
                 state: self.state.clone(),
-                text: text.into(),
+                text,
                 links,
                 highlights,
             });
@@ -1776,7 +1839,7 @@ mod tests {
             &theme,
             None::<Span>,
         );
-        _ = unknown_block.styles();
+        _ = unknown_block.styles(&theme);
 
         let cached_language = CODE_BLOCK_HIGHLIGHTERS.with(|cache| {
             cache
@@ -1808,7 +1871,7 @@ mod tests {
             &theme,
             None::<Span>,
         );
-        _ = registered_block.styles();
+        _ = registered_block.styles(&theme);
 
         let cached_language = CODE_BLOCK_HIGHLIGHTERS.with(|cache| {
             cache

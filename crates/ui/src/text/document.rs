@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use gpui::{
     App, InteractiveElement as _, IntoElement, ListState, ParentElement as _, SharedString,
     Styled as _, Window, div,
@@ -30,14 +32,6 @@ impl NodeRenderOptions {
 }
 
 impl ParsedDocument {
-    pub(super) fn text(&self) -> String {
-        let mut text = String::new();
-        for block in self.blocks.iter() {
-            text.push_str(&block.text());
-        }
-        text
-    }
-
     pub(super) fn selected_text(&self) -> String {
         let mut text = String::new();
         for block in self.blocks.iter() {
@@ -71,7 +65,7 @@ impl ParsedDocument {
     }
 
     pub(super) fn render_root(
-        &self,
+        self: &Arc<Self>,
         list_state: Option<ListState>,
         node_cx: &NodeContext,
         window: &mut Window,
@@ -101,19 +95,17 @@ impl ParsedDocument {
             ..Default::default()
         };
 
-        let blocks = &self.blocks;
-
-        if list_state.item_count() != blocks.len() {
-            list_state.reset(blocks.len());
+        if list_state.item_count() != self.blocks.len() {
+            list_state.reset(self.blocks.len());
         }
 
         div().id("document").size_full().child(
             gpui::list(list_state, {
                 let node_cx = node_cx.clone();
-                let blocks = blocks.clone();
+                let document = self.clone();
                 move |ix, window, cx| {
-                    let is_last = ix + 1 == blocks.len();
-                    blocks[ix]
+                    let is_last = ix + 1 == document.blocks.len();
+                    document.blocks[ix]
                         .render_block(
                             NodeRenderOptions {
                                 ix,
