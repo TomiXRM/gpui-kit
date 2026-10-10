@@ -1219,6 +1219,14 @@ impl InputState {
         &self.text
     }
 
+    /// Return the cached visual row count, including soft wraps, before folding.
+    ///
+    /// Reflects the most recent text layout; mounting or changing the wrapping
+    /// width may require another frame. Does not shape text or allocate.
+    pub fn wrap_row_count(&self) -> usize {
+        self.display_map.wrap_row_count()
+    }
+
     /// Return the (0-based) [`Position`] of the cursor.
     pub fn cursor_position(&self) -> Position {
         let offset = self.cursor();
