@@ -1944,10 +1944,13 @@ impl Element for TextElement {
             }
         }
 
-        // And reset focused_input when next_frame start
+        // A queued native frame must not own an input after its view is dropped.
         window.on_next_frame({
-            let state = self.state.clone();
+            let state = self.state.downgrade();
             move |window, cx| {
+                let Some(state) = state.upgrade() else {
+                    return;
+                };
                 if !focused && Root::read(window, cx).focused_input.as_ref() == Some(&state) {
                     Root::update(window, cx, |root, _, cx| {
                         root.focused_input = None;
