@@ -224,8 +224,12 @@ impl TextWrapper {
         self.update_all(&self.text.clone(), cx);
     }
 
+    pub(crate) fn font_matches(&self, font: &Font, font_size: Pixels) -> bool {
+        self.font.eq(font) && self.font_size == font_size
+    }
+
     pub(crate) fn set_font(&mut self, font: Font, font_size: Pixels, cx: &mut App) {
-        if self.font.eq(&font) && self.font_size == font_size {
+        if self.font_matches(&font, font_size) {
             return;
         }
 

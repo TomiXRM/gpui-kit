@@ -1896,12 +1896,12 @@ impl InputState {
         self.diagnostic_popover = None;
     }
 
-    pub(super) fn update_scroll_offset(
-        &mut self,
-        offset: Option<Point<Pixels>>,
-        cx: &mut Context<Self>,
-    ) {
-        let mut offset = offset.unwrap_or(self.scroll_handle.offset());
+    pub(super) fn clamp_scroll_offset(
+        &self,
+        mut offset: Point<Pixels>,
+        scroll_size: gpui::Size<Pixels>,
+        input_size: gpui::Size<Pixels>,
+    ) -> Point<Pixels> {
         // In addition to left alignment, a cursor position will be reserved on the right side
         let safe_x_offset = if self.text_align == TextAlign::Left {
             px(0.)
@@ -1909,10 +1909,9 @@ impl InputState {
             -CURSOR_WIDTH
         };
 
-        let safe_y_range =
-            (-self.scroll_size.height + self.input_bounds.size.height).min(px(0.0))..px(0.);
-        let safe_x_range = (-self.scroll_size.width + self.input_bounds.size.width + safe_x_offset)
-            .min(safe_x_offset)..px(0.);
+        let safe_y_range = (-scroll_size.height + input_size.height).min(px(0.0))..px(0.);
+        let safe_x_range =
+            (-scroll_size.width + input_size.width + safe_x_offset).min(safe_x_offset)..px(0.);
 
         offset.y = if self.mode.is_single_line() {
             px(0.)
@@ -1920,6 +1919,19 @@ impl InputState {
             offset.y.clamp(safe_y_range.start, safe_y_range.end)
         };
         offset.x = offset.x.clamp(safe_x_range.start, safe_x_range.end);
+        offset
+    }
+
+    pub(super) fn update_scroll_offset(
+        &mut self,
+        offset: Option<Point<Pixels>>,
+        cx: &mut Context<Self>,
+    ) {
+        let offset = self.clamp_scroll_offset(
+            offset.unwrap_or(self.scroll_handle.offset()),
+            self.scroll_size,
+            self.input_bounds.size,
+        );
         self.scroll_handle.set_offset(offset);
         cx.notify();
     }

@@ -206,6 +206,18 @@ fn clamp_auto_grow_vertical_scroll_offset(
     }
 }
 
+fn scroll_to_visible_line(
+    scroll_top: Pixels,
+    line_top: Pixels,
+    line_height: Pixels,
+    input_height: Pixels,
+) -> Pixels {
+    let last_visible_top = (input_height - line_height).max(px(0.));
+    scroll_top
+        .clamp(-line_top, last_visible_top - line_top)
+        .min(px(0.))
+}
+
 use super::MASK_CHAR;
 
 /// Convert a byte offset in the original text to a byte offset in the masked display string.
@@ -327,6 +339,68 @@ impl TextElement {
         });
     }
 
+    fn previous_cursor_is_visible(state: &InputState, window: &Window) -> bool {
+        let cursor = state.cursor();
+        if !state.focus_handle.is_focused(window)
+            || state.disabled
+            || !state.selected_range.is_empty()
+            || state.ime_marked_range.is_some()
+            || state.last_cursor != Some(cursor)
+            || state.last_selected_range != Some(state.selected_range)
+            || state.selecting
+            || state.auto_scroll.is_active()
+            || state.deferred_scroll_offset.is_some()
+        {
+            return false;
+        }
+
+        let (Some(last_layout), Some(last_bounds)) =
+            (state.last_layout.as_ref(), state.last_bounds.as_ref())
+        else {
+            return false;
+        };
+        let Some(cursor_bounds) = last_layout.cursor_bounds else {
+            return false;
+        };
+        let row = state.text.offset_to_point(cursor).row;
+        let Some(line) = last_layout.line(row) else {
+            return false;
+        };
+        let line_start = state.text.line_start_offset(row);
+        let local_offset = if state.masked {
+            masked_display_offset(&state.text, cursor)
+                .saturating_sub(masked_display_offset(&state.text, line_start))
+        } else {
+            cursor.saturating_sub(line_start)
+        };
+        let Some(cursor_position) =
+            line.position_for_index(local_offset, last_layout, state.cursor_line_end_affinity)
+        else {
+            return false;
+        };
+
+        // The saved caret includes painted x scroll, but not y scroll. Observe
+        // the current handle so a wheel event since paint can leave it offscreen.
+        let scroll_offset = state.scroll_handle.offset();
+        // A clamped indicator cannot prove its shaped endpoint was visible.
+        let text_left = state.input_bounds.left() + last_layout.line_number_width;
+        let shaped_cursor_x = text_left + cursor_position.x + scroll_offset.x;
+        if shaped_cursor_x < text_left || shaped_cursor_x > state.input_bounds.right() {
+            return false;
+        }
+
+        let painted_scroll_x = last_bounds.origin.x - state.input_bounds.origin.x;
+        let cursor_left = cursor_bounds.left() + scroll_offset.x - painted_scroll_x;
+        let line_top = cursor_bounds.top()
+            - (last_layout.line_height - cursor_bounds.size.height) / 2.
+            + scroll_offset.y;
+
+        cursor_left >= text_left
+            && cursor_left + cursor_bounds.size.width <= state.input_bounds.right()
+            && line_top >= state.input_bounds.top()
+            && line_top + last_layout.line_height <= state.input_bounds.bottom()
+    }
+
     /// Returns the:
     ///
     /// - cursor bounds
@@ -339,6 +413,7 @@ impl TextElement {
         last_layout: &LastLayout,
         bounds: &mut Bounds<Pixels>,
         scroll_size: Size<Pixels>,
+        reflow_scroll_offset: Option<Point<Pixels>>,
         _: &mut Window,
         cx: &mut App,
     ) -> (Option<Bounds<Pixels>>, Point<Pixels>, Option<usize>) {
@@ -367,7 +442,8 @@ impl TextElement {
             cursor = masked_display_offset(&state.text, cursor);
         }
 
-        let mut scroll_offset = state.scroll_handle.offset();
+        let mut scroll_offset =
+            reflow_scroll_offset.unwrap_or_else(|| state.scroll_handle.offset());
 
         // Padding kept between the cursor and the viewport's top/bottom
         // edges, used by the auto-scroll-into-view computation below.
@@ -404,7 +480,19 @@ impl TextElement {
         let cursor_bounds = {
             let selection_changed = state.last_selected_range != Some(selected_range);
             let auto_scrolling = state.auto_scroll.is_active();
-            if selection_changed && !is_selected_all {
+            if reflow_scroll_offset.is_some() {
+                let last_visible_x =
+                    (bounds.size.width - line_number_width - CURSOR_WIDTH).max(px(0.));
+                scroll_offset.x = scroll_offset
+                    .x
+                    .clamp(-cursor_pos.x, last_visible_x - cursor_pos.x);
+                scroll_offset.y = scroll_to_visible_line(
+                    scroll_offset.y,
+                    cursor_pos.y,
+                    line_height,
+                    bounds.size.height,
+                );
+            } else if selection_changed && !is_selected_all {
                 // For Right alignment use 0 margin: cursor is clamped to bounds separately,
                 // so we never scroll the text for cursor-at-edge, avoiding a first-click jump.
                 let safety_margin = match last_layout.text_align {
@@ -467,6 +555,12 @@ impl TextElement {
                 }
             }
 
+            if let Some(deferred_scroll_offset) = state.deferred_scroll_offset {
+                scroll_offset = deferred_scroll_offset;
+            }
+            // Paint and persistence must agree on the fresh native extent.
+            scroll_offset = state.clamp_scroll_offset(scroll_offset, scroll_size, bounds.size);
+
             // cursor bounds
             let cursor_height = match state.size {
                 crate::Size::Large => 1.,
@@ -474,13 +568,7 @@ impl TextElement {
                 _ => 0.85,
             } * line_height;
 
-            // Match the caret to the deferred scroll target (applied below) that
-            // the text paints at; otherwise the caret follows the cursor-scroll
-            // while the text uses the deferred offset, flashing it mid-field.
-            let cursor_scroll_x = state
-                .deferred_scroll_offset
-                .map(|offset| offset.x)
-                .unwrap_or(scroll_offset.x);
+            let cursor_scroll_x = scroll_offset.x;
 
             // For Right alignment, clamp cursor within the right edge of bounds so it
             // stays visible without having to shift the text via scroll_offset.
@@ -498,16 +586,6 @@ impl TextElement {
                 size(CURSOR_WIDTH, cursor_height),
             ))
         };
-
-        if let Some(deferred_scroll_offset) = state.deferred_scroll_offset {
-            scroll_offset = deferred_scroll_offset;
-        }
-        scroll_offset.y = clamp_auto_grow_vertical_scroll_offset(
-            &state.mode,
-            scroll_offset.y,
-            scroll_size.height,
-            bounds.size.height,
-        );
 
         bounds.origin = bounds.origin + scroll_offset;
 
@@ -773,6 +851,7 @@ impl TextElement {
         state: &InputState,
         line_height: Pixels,
         input_height: Pixels,
+        mut scroll_top: Pixels,
     ) -> (Range<usize>, Vec<usize>, Pixels) {
         // Add extra rows to avoid showing empty space when scroll to bottom.
         let extra_rows = 1;
@@ -787,11 +866,6 @@ impl TextElement {
             return (0..0, Vec::new(), px(0.));
         }
 
-        let mut scroll_top = if let Some(deferred_scroll_offset) = state.deferred_scroll_offset {
-            deferred_scroll_offset.y
-        } else {
-            state.scroll_handle.offset().y
-        };
         scroll_top = clamp_auto_grow_vertical_scroll_offset(
             &state.mode,
             scroll_top,
@@ -1508,11 +1582,6 @@ impl Element for TextElement {
         let font = style.font();
         let text_size = style.font_size.to_pixels(window.rem_size());
 
-        self.state.update(cx, |state, cx| {
-            state.display_map.set_font(font, text_size, cx);
-            state.display_map.ensure_text_prepared(&state.text, cx);
-        });
-
         let state = self.state.read(cx);
         let multi_line = state.mode.is_multi_line();
         let text = state.text.clone();
@@ -1554,17 +1623,52 @@ impl Element for TextElement {
             .map(|l| l.wrap_width != wrap_width)
             .unwrap_or(true);
 
-        if wrap_width_changed {
-            self.state.update(cx, |state, cx| {
-                state.display_map.on_layout_changed(wrap_width, cx);
+        let line_height = window.line_height();
+        let geometry_changed = !state.display_map.font_matches(&font, text_size)
+            || wrap_width_changed
+            || state.last_layout.as_ref().is_some_and(|layout| {
+                layout.line_height != line_height
+                    || layout.content_width != bounds.size.width
+                    || layout.line_number_width != line_number_width
+                    || state.input_bounds.size != bounds.size
             });
-        }
+        let preserve_visible_cursor =
+            geometry_changed && Self::previous_cursor_is_visible(state, window);
+
+        self.state.update(cx, |state, cx| {
+            state.display_map.set_font(font, text_size, cx);
+            state.display_map.ensure_text_prepared(&state.text, cx);
+            if wrap_width_changed {
+                state.display_map.on_layout_changed(wrap_width, cx);
+            }
+        });
 
         let state = self.state.read(cx);
-        let line_height = window.line_height();
-
+        // Seed the native visible range before shaping: an old pixel offset can
+        // otherwise exclude the cursor's new buffer line and produce a fallback caret.
+        let reflow_scroll_offset = if preserve_visible_cursor {
+            state
+                .display_map
+                .cursor_display_row(state.cursor(), state.cursor_line_end_affinity)
+                .map(|row| {
+                    let mut offset = state.scroll_handle.offset();
+                    offset.y = scroll_to_visible_line(
+                        offset.y,
+                        line_height * row,
+                        line_height,
+                        bounds.size.height,
+                    );
+                    offset
+                })
+        } else {
+            None
+        };
+        let scroll_offset = state
+            .deferred_scroll_offset
+            .or(reflow_scroll_offset)
+            .unwrap_or_else(|| state.scroll_handle.offset());
         let (visible_range, visible_buffer_lines, visible_top) =
-            self.calculate_visible_range(&state, line_height, bounds.size.height);
+            self.calculate_visible_range(&state, line_height, bounds.size.height, scroll_offset.y);
         let visible_start_offset = state.text.line_start_offset(visible_range.start);
         let visible_end_offset = state
             .text
@@ -1807,8 +1911,14 @@ impl Element for TextElement {
         let input_bounds = bounds;
         let original_x = bounds.origin.x;
 
-        let (cursor_bounds, cursor_scroll_offset, current_row) =
-            self.layout_cursor(&last_layout, &mut bounds, scroll_size, window, cx);
+        let (cursor_bounds, cursor_scroll_offset, current_row) = self.layout_cursor(
+            &last_layout,
+            &mut bounds,
+            scroll_size,
+            reflow_scroll_offset,
+            window,
+            cx,
+        );
         last_layout.cursor_bounds = cursor_bounds;
 
         let search_match_paths = self.layout_search_matches(&last_layout, &mut bounds, cx);

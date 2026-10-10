@@ -20,6 +20,42 @@ UI components for building fantastic desktop applications using [GPUI](https://g
 - **Editor**: High performance code editor (Up to 200K lines for stable performance) with LSP (diagnostics, completion, hover, etc).
 - **Syntax Highlighting**: Syntax highlighting for editor and markdown components using Tree Sitter.
 
+### Input reflow
+
+Native `Input` reflow now retains a focused, unchanged collapsed caret's text
+line when font, wrapping, or viewport geometry changes, provided its previously
+shaped endpoint and caret were visible in its own text viewport. Font changes
+are detected even when line height stays unchanged. Previously, an unchanged
+selection could leave the old pixel scroll offset in place, excluding the
+caret's new buffer line from shaping after zoom or narrowing.
+
+The correction selects the native visible range before shaping, uses fresh
+shaped coordinates for minimum full-line/caret fit, and shares the native extent
+clamp with scroll persistence. It adds no public API or owned input state and
+does not reset value, selection, focus, or undo history. Manual wheel reading
+and pending explicit scroll intent take priority; nonempty/reversed selections
+are not new caret-follow requests. A clamped right-aligned caret indicator is
+not evidence that an offscreen logical endpoint should pull a head reader to
+the tail.
+
+**Consumer validation:** Kagi's thirteen macOS native consumer scenarios passed:
+three existing PR oracles and ten focused reflow scenarios. Coverage includes
+typed English/Japanese long PR drafts through actual zoom from 1111 to 1670
+permille without End/refocus/reset repairs, fresh END glyph/caret lookup bounds,
+fixed-height multiline and line-numbered code inputs, three-row auto-grow,
+same-line-height font changes, width-only wrapping, manual/deferred scroll
+intent, both nonempty selection directions, undo/redo, and right-aligned
+single-line head reading during a width-only resize from 420 to 300. Real Editor
+coverage checks fresh glyphs within the window; real Issues coverage checks
+value, focus, draft subscription, and undo/redo.
+
+**Limits:** These fixtures do not prove private painted soft-wrap caret affinity
+(public geometry uses false affinity), Issues private caret/glyph geometry,
+Editor own-viewport clipping, native folds/ghost text/IME/read-only behavior,
+performance, or default-application Tier B visual review. Previous parent
+clipping is not stored; the retention gate uses the previous own text viewport.
+Full-line fit requires a viewport at least one text line high.
+
 ## Showcase
 
 https://longbridge.github.io/gpui-component/gallery/

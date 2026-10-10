@@ -230,6 +230,10 @@ impl DisplayMap {
         self.rebuild_fold_projection();
     }
 
+    pub(crate) fn font_matches(&self, font: &Font, font_size: Pixels) -> bool {
+        self.wrap_map.wrapper().font_matches(font, font_size)
+    }
+
     /// Set font parameters
     pub fn set_font(&mut self, font: Font, font_size: Pixels, cx: &mut App) {
         self.wrap_map.set_font(font, font_size, cx);
@@ -271,6 +275,49 @@ impl DisplayMap {
     #[inline]
     pub(crate) fn offset_to_wrap_display_point(&self, offset: usize) -> WrapDisplayPoint {
         self.wrap_map.wrapper().offset_to_display_point(offset)
+    }
+
+    /// Resolve the visual row with the same boundary ownership as the shaped caret.
+    pub(crate) fn cursor_display_row(
+        &self,
+        offset: usize,
+        line_end_affinity: bool,
+    ) -> Option<usize> {
+        let buffer_row = self.text().offset_to_point(offset).row;
+        let local_offset = offset.saturating_sub(self.text().line_start_offset(buffer_row));
+        let line = self.line(buffer_row)?;
+
+        // The general offset conversion chooses the next row at a soft wrap.
+        // A caret can instead belong to the preceding row, or a leading empty row.
+        // Native wrap boundaries produce ordered, contiguous ranges. Searching
+        // starts without end affinity also preserves the first empty boundary row.
+        let boundary = if line_end_affinity {
+            line.wrapped_lines
+                .partition_point(|range| range.end < local_offset)
+        } else {
+            line.wrapped_lines
+                .partition_point(|range| range.start < local_offset)
+        };
+        let local_row = line
+            .wrapped_lines
+            .get(boundary)
+            .filter(|range| {
+                (range.is_empty() && local_offset == range.start)
+                    || (line_end_affinity && local_offset == range.end)
+            })
+            .map(|_| boundary)
+            .unwrap_or_else(|| {
+                let containing = line
+                    .wrapped_lines
+                    .partition_point(|range| range.end <= local_offset);
+                line.wrapped_lines
+                    .get(containing)
+                    .filter(|range| range.contains(&local_offset))
+                    .map(|_| containing)
+                    .unwrap_or_else(|| line.lines_len().saturating_sub(1))
+            });
+        let wrap_row = self.wrap_map.buffer_line_to_first_wrap_row(buffer_row) + local_row;
+        self.wrap_row_to_display_row(wrap_row)
     }
 
     /// Convert wrap display point to byte offset.
