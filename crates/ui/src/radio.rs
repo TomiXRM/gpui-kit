@@ -221,7 +221,7 @@ impl RenderOnce for Radio {
                                 div()
                                     .size(relative(6.0 / 14.0))
                                     .rounded_full()
-                                    .bg(gpui::rgb(0xffffff))
+                                    .bg(cx.theme().primary_foreground)
                                     .when(disabled, |this| this.opacity(0.5)),
                             )
                         }),
