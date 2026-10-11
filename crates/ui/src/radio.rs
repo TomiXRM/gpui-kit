@@ -1,8 +1,8 @@
 use std::rc::Rc;
 
 use crate::{
-    ActiveTheme, AxisExt, FocusableExt as _, Sizable, Size, StyledExt,
-    checkbox::checkbox_check_icon, h_flex, text::Text, tooltip::ComponentTooltip, v_flex,
+    ActiveTheme, AxisExt, FocusableExt as _, Sizable, Size, StyledExt, h_flex, text::Text,
+    tooltip::ComponentTooltip, v_flex,
 };
 use gpui::{
     AnyElement, App, Axis, Div, ElementId, InteractiveElement, IntoElement, ParentElement,
@@ -170,9 +170,7 @@ impl RenderOnce for Radio {
                 .when_some(self.position_in_set, |this, pos| {
                     this.aria_position_in_set(pos)
                 })
-                .when_some(self.size_of_set, |this, size| {
-                    this.aria_size_of_set(size)
-                })
+                .when_some(self.size_of_set, |this, size| this.aria_size_of_set(size))
                 .when(!self.disabled, |this| {
                     this.track_focus(
                         &focus_handle
@@ -215,9 +213,18 @@ impl RenderOnce for Radio {
                             true if disabled => this.bg(bg),
                             true => this.bg(cx.theme().tokens.primary),
                         })
-                        .child(checkbox_check_icon(
-                            self.id, self.size, checked, disabled, window, cx,
-                        )),
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .when(checked, |this| {
+                            this.child(
+                                div()
+                                    .size(relative(6.0 / 14.0))
+                                    .rounded_full()
+                                    .bg(gpui::rgb(0xffffff))
+                                    .when(disabled, |this| this.opacity(0.5)),
+                            )
+                        }),
                 )
                 .when(!self.children.is_empty() || self.label.is_some(), |this| {
                     this.child(
