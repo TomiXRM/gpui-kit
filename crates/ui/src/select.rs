@@ -1,8 +1,8 @@
 use gpui::{
     AnyElement, App, ClickEvent, Context, DismissEvent, Edges, ElementId, Entity, EventEmitter,
     FocusHandle, Focusable, InteractiveElement, IntoElement, KeyBinding, Length, ParentElement,
-    Render, RenderOnce, SharedString, StatefulInteractiveElement, StyleRefinement, Styled, Window,
-    anchored, deferred, div, prelude::FluentBuilder, px, rems,
+    Render, RenderOnce, Role, SharedString, StatefulInteractiveElement, StyleRefinement, Styled,
+    Window, anchored, deferred, div, prelude::FluentBuilder, px, rems,
 };
 use rust_i18n::t;
 
@@ -71,6 +71,10 @@ struct SelectOptions {
     menu_max_h: Length,
     disabled: bool,
     appearance: bool,
+    aria_role: Option<Role>,
+    aria_label: Option<SharedString>,
+    aria_value: Option<SharedString>,
+    aria_expanded: Option<bool>,
 }
 
 impl Default for SelectOptions {
@@ -87,6 +91,10 @@ impl Default for SelectOptions {
             disabled: false,
             appearance: true,
             search_placeholder: None,
+            aria_role: None,
+            aria_label: None,
+            aria_value: None,
+            aria_expanded: None,
         }
     }
 }
@@ -313,6 +321,11 @@ where
     /// Get the current selected value.
     pub fn selected_value(&self) -> Option<&<D::Item as SearchableListItem>::Value> {
         self.state.selection.first().map(|(_, i)| i.value())
+    }
+
+    /// Whether the options popup is open.
+    pub fn is_open(&self) -> bool {
+        self.state.open
     }
 
     /// Focus the select trigger input.
@@ -601,6 +614,30 @@ where
         }
     }
 
+    /// Set the role on the root that owns keyboard focus, not a wrapper.
+    pub fn role(mut self, role: Role) -> Self {
+        self.options.aria_role = Some(role);
+        self
+    }
+
+    /// Name the focused trigger for assistive technology.
+    pub fn aria_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.options.aria_label = Some(label.into());
+        self
+    }
+
+    /// Expose the current choice's display value on the focused trigger.
+    pub fn aria_value(mut self, value: impl Into<SharedString>) -> Self {
+        self.options.aria_value = Some(value.into());
+        self
+    }
+
+    /// Expose the popup state on the focused trigger.
+    pub fn aria_expanded(mut self, expanded: bool) -> Self {
+        self.options.aria_expanded = Some(expanded);
+        self
+    }
+
     /// Set the width of the dropdown menu, default: `Length::Auto`.
     pub fn menu_width(mut self, width: impl Into<Length>) -> Self {
         self.options.menu_width = width.into();
@@ -723,8 +760,12 @@ where
     D: SearchableListDelegate + 'static,
     <D::Item as SearchableListItem>::Value: PartialEq + Clone,
 {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(mut self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let disabled = self.options.disabled;
+        let aria_role = self.options.aria_role;
+        let aria_label = self.options.aria_label.take();
+        let aria_value = self.options.aria_value.take();
+        let aria_expanded = self.options.aria_expanded;
         let focus_handle = self.state.focus_handle(cx);
         let empty = self.empty;
         let opts = self.options;
@@ -753,6 +794,10 @@ where
             .when(!disabled, |this| {
                 this.track_focus(&focus_handle.tab_stop(true))
             })
+            .when_some(aria_role, |this, role| this.role(role))
+            .when_some(aria_label, |this, label| this.aria_label(label))
+            .when_some(aria_value, |this, value| this.aria_value(value))
+            .when_some(aria_expanded, |this, expanded| this.aria_expanded(expanded))
             .on_action(window.listener_for(&self.state, SelectState::up))
             .on_action(window.listener_for(&self.state, SelectState::down))
             .on_action(window.listener_for(&self.state, SelectState::enter))
@@ -805,6 +850,31 @@ mod tests {
 
             assert_eq!(state.read(cx).selected_index(cx), Some(initial));
             assert_eq!(state.read(cx).selected_value(), Some(&"Blueberry"));
+        });
+    }
+
+    #[gpui::test]
+    fn test_select_accessibility_builder_and_open_state(cx: &mut TestAppContext) {
+        cx.update(crate::init);
+        let cx = cx.add_empty_window();
+        cx.update(|window, cx| {
+            let state = cx.new(|cx| {
+                SelectState::new(vec!["Light", "Dark"], Some(IndexPath::new(0)), window, cx)
+            });
+            assert!(!state.read(cx).is_open());
+            let trigger = super::Select::new(&state)
+                .role(gpui::Role::ComboBox)
+                .aria_label("Theme")
+                .aria_value("Light")
+                .aria_expanded(false);
+            assert_eq!(trigger.options.aria_role, Some(gpui::Role::ComboBox));
+            assert_eq!(trigger.options.aria_label.as_deref(), Some("Theme"));
+            assert_eq!(trigger.options.aria_value.as_deref(), Some("Light"));
+            assert_eq!(trigger.options.aria_expanded, Some(false));
+            state.update(cx, |state, cx| state.set_open(true, cx));
+            assert!(state.read(cx).is_open());
+            state.update(cx, |state, cx| state.set_open(false, cx));
+            assert!(!state.read(cx).is_open());
         });
     }
 }

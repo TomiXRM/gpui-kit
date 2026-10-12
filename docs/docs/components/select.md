@@ -51,6 +51,19 @@ let state = cx.new(|cx| {
 Select::new(&state)
 ```
 
+### Accessible focused trigger
+
+Assign semantics directly to the Select root that owns keyboard focus, not to
+an ancestor wrapper. Observe state notifications when rendering expanded state.
+
+```rust
+Select::new(&state)
+    .role(gpui::Role::ComboBox)
+    .aria_label("Theme")
+    .aria_value("Apple Light")
+    .aria_expanded(state.read(cx).is_open())
+```
+
 ### Placeholder
 
 ```rust
