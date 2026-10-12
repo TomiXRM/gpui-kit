@@ -21,6 +21,10 @@ mod otp_input;
 pub(crate) mod popovers;
 mod rope_ext;
 mod search;
+mod search_controls;
+mod search_labels;
+#[cfg(feature = "test-support")]
+mod search_probes;
 mod selection;
 mod state;
 
@@ -39,4 +43,7 @@ pub use number_input::{NumberInput, NumberInputEvent, NumberStep, StepAction};
 pub use otp_input::*;
 pub use rope_ext::{InputEdit, Point, RopeExt, RopeLines};
 pub use ropey::Rope;
+pub use search_labels::SearchPanelLabels;
+#[cfg(feature = "test-support")]
+pub use search_probes::{SearchControlProbe, SearchPanelProbe};
 pub use state::*;

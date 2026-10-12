@@ -210,6 +210,8 @@ pub struct Button {
 
     tab_index: isize,
     tab_stop: bool,
+    #[cfg(feature = "test-support")]
+    bounds_probe: Option<Rc<dyn Fn(gpui::Bounds<Pixels>)>>,
 }
 
 impl From<Button> for AnyElement {
@@ -254,6 +256,8 @@ impl Button {
             dropdown_caret: false,
             tab_index: 0,
             tab_stop: true,
+            #[cfg(feature = "test-support")]
+            bounds_probe: None,
         }
     }
 
@@ -296,6 +300,22 @@ impl Button {
     /// Set the tooltip of the button.
     pub fn tooltip(mut self, tooltip: impl Into<SharedString>) -> Self {
         self.tooltip = Some((tooltip.into(), None));
+        self
+    }
+
+    /// Build hover help lazily, using the host's current locale.
+    pub fn tooltip_builder(
+        mut self,
+        builder: impl Fn(&mut Window, &mut App) -> gpui::AnyView + 'static,
+    ) -> Self {
+        self.tooltip_builder = Some(Rc::new(builder));
+        self
+    }
+
+    /// Observe the actual button bounds without changing icon-only sizing.
+    #[cfg(feature = "test-support")]
+    pub fn bounds_probe(mut self, probe: impl Fn(gpui::Bounds<Pixels>) + 'static) -> Self {
+        self.bounds_probe = Some(Rc::new(probe));
         self
     }
 
@@ -433,6 +453,8 @@ impl InteractiveElement for Button {
         self.base.interactivity()
     }
 }
+
+impl gpui::StatefulInteractiveElement for Button {}
 
 impl RenderOnce for Button {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
@@ -651,6 +673,17 @@ impl RenderOnce for Button {
                 }
             })
             .focus_ring(is_focused, px(0.), window, cx)
+            .map(|this| {
+                #[cfg(feature = "test-support")]
+                {
+                    use crate::ElementExt as _;
+                    return this.when_some(self.bounds_probe, |this, probe| {
+                        this.on_prepaint(move |bounds, _, _| probe(bounds))
+                    });
+                }
+                #[cfg(not(feature = "test-support"))]
+                this
+            })
     }
 }
 

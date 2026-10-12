@@ -130,6 +130,7 @@ pub enum InputEvent {
 pub(super) const CONTEXT: &str = "Input";
 
 pub(crate) fn init(cx: &mut App) {
+    super::search::init(cx);
     cx.bind_keys([
         KeyBinding::new("backspace", Backspace, Some(CONTEXT)),
         KeyBinding::new("shift-backspace", Backspace, Some(CONTEXT)),
@@ -351,6 +352,7 @@ pub struct InputState {
     /// - "💝" = 4
     pub(super) selected_range: Selection,
     pub(super) search_panel: Option<Entity<SearchPanel>>,
+    pub(super) search_labels: super::SearchPanelLabels,
     pub(super) searchable: bool,
     pub(super) replaceable: bool,
     /// Range for save the selected word, use to keep word range when drag move.
@@ -490,6 +492,7 @@ impl InputState {
             history,
             selected_range: Selection::default(),
             search_panel: None,
+            search_labels: super::SearchPanelLabels::default(),
             searchable: false,
             replaceable: true,
             selected_word_range: None,
@@ -607,6 +610,26 @@ impl InputState {
         debug_assert!(self.mode.is_multi_line());
         self.searchable = searchable;
         self
+    }
+
+    /// Configure the accessible names and help text of the built-in Find bar.
+    pub fn search_labels(mut self, labels: super::SearchPanelLabels) -> Self {
+        self.search_labels = labels;
+        self
+    }
+
+    /// Update an existing Find bar without resetting its query or editor history.
+    pub fn set_search_labels(&mut self, labels: super::SearchPanelLabels, cx: &mut Context<Self>) {
+        if self.search_labels == labels {
+            return;
+        }
+        self.search_labels = labels.clone();
+        if let Some(panel) = &self.search_panel {
+            panel.update(cx, |panel, cx| {
+                panel.labels = labels;
+                cx.notify();
+            });
+        }
     }
 
     /// Set whether search UI allows replacement, default is true.

@@ -1,7 +1,7 @@
 use aho_corasick::AhoCorasick;
-use rust_i18n::t;
 use std::{ops::Range, rc::Rc};
 
+use gpui::StatefulInteractiveElement as _;
 use gpui::{
     App, AppContext as _, Context, Empty, Entity, FocusHandle, Focusable, Half,
     InteractiveElement as _, IntoElement, ParentElement as _, Pixels, Render, Styled, Subscription,
@@ -14,8 +14,8 @@ use crate::{
     button::{Button, ButtonVariants},
     h_flex,
     input::{
-        Enter, Escape, IndentInline, Input, InputEvent, InputState, RopeExt as _, Search,
-        movement::MoveDirection,
+        Enter, Escape, IndentInline, Input, InputEvent, InputState, OutdentInline, RopeExt as _,
+        Search, movement::MoveDirection,
     },
     label::Label,
     v_flex,
@@ -24,6 +24,15 @@ use crate::{
 const CONTEXT: &'static str = "SearchPanel";
 
 actions!(input, [Tab]);
+
+pub(super) fn init(cx: &mut App) {
+    cx.bind_keys([
+        gpui::KeyBinding::new("escape", Escape, Some(CONTEXT)),
+        // The code editor's ancestor Input context otherwise consumes Return
+        // as Find Next before the focused Button receives its keyboard click.
+        gpui::KeyBinding::new("enter", gpui::NoAction, Some("SearchPanelButton")),
+    ]);
+}
 
 #[derive(Debug, Clone)]
 pub struct SearchMatcher {
@@ -167,7 +176,11 @@ impl DoubleEndedIterator for SearchMatcher {
 }
 
 pub(super) struct SearchPanel {
+    pub(super) labels: super::SearchPanelLabels,
+    #[cfg(feature = "test-support")]
+    pub(super) probe: Rc<std::cell::RefCell<super::SearchPanelProbe>>,
     editor: Entity<InputState>,
+    focus_handle: FocusHandle,
     search_input: Entity<InputState>,
     replace_input: Entity<InputState>,
     case_insensitive: bool,
@@ -204,7 +217,7 @@ impl InputState {
 
         let search_panel = match self.search_panel.as_ref() {
             Some(panel) => panel.clone(),
-            None => SearchPanel::new(cx.entity(), window, cx),
+            None => SearchPanel::new(cx.entity(), self.search_labels.clone(), window, cx),
         };
 
         let text = self.text.clone();
@@ -221,6 +234,23 @@ impl InputState {
 }
 
 impl SearchPanel {
+    #[cfg(feature = "test-support")]
+    pub(super) fn is_open(&self) -> bool {
+        self.open
+    }
+    #[cfg(feature = "test-support")]
+    pub(super) fn is_replacing(&self) -> bool {
+        self.replace_mode
+    }
+    #[cfg(feature = "test-support")]
+    pub(super) fn is_case_sensitive(&self) -> bool {
+        !self.case_insensitive
+    }
+    #[cfg(feature = "test-support")]
+    pub(super) fn match_position(&self) -> (usize, usize) {
+        (self.matcher.current_match_ix, self.matcher.len())
+    }
+
     fn next_scroll_direction(
         previous_match_ix: usize,
         current_match_ix: usize,
@@ -243,7 +273,12 @@ impl SearchPanel {
         }
     }
 
-    pub fn new(editor: Entity<InputState>, window: &mut Window, cx: &mut App) -> Entity<Self> {
+    pub fn new(
+        editor: Entity<InputState>,
+        labels: super::SearchPanelLabels,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Entity<Self> {
         let search_input = cx.new(|cx| InputState::new(window, cx));
         let replace_input = cx.new(|cx| InputState::new(window, cx));
 
@@ -262,7 +297,11 @@ impl SearchPanel {
                 ];
 
             Self {
+                labels,
+                #[cfg(feature = "test-support")]
+                probe: Rc::default(),
                 editor,
+                focus_handle: cx.focus_handle().tab_stop(false),
                 search_input,
                 replace_input,
                 case_insensitive: true,
@@ -340,7 +379,16 @@ impl SearchPanel {
     }
 
     fn on_action_tab(&mut self, _: &IndentInline, window: &mut Window, cx: &mut Context<Self>) {
-        self.editor.focus_handle(cx).focus(window, cx);
+        window.focus_next(cx);
+    }
+
+    fn on_action_shift_tab(
+        &mut self,
+        _: &OutdentInline,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        window.focus_prev(cx);
     }
 
     fn prev(&mut self, _: &mut Window, cx: &mut Context<Self>) {
@@ -389,6 +437,9 @@ impl SearchPanel {
             .get(self.matcher.current_match_ix)
             .cloned()
         {
+            if self.matcher.len() == 1 {
+                self.replace_input.focus_handle(cx).focus(window, cx);
+            }
             let text_state = self.editor.clone();
             let next_match_ix = self.matcher.next_ix().unwrap_or(previous_match_ix);
             let next_range = self.matcher.peek().unwrap_or(range.clone());
@@ -425,6 +476,9 @@ impl SearchPanel {
         if ranges.is_empty() {
             return;
         }
+        // The action may become disabled on the next frame. Keep keyboard
+        // ownership in the bar rather than on an untracked disabled Button.
+        self.replace_input.focus_handle(cx).focus(window, cx);
 
         let editor = self.editor.clone();
         cx.spawn_in(window, async move |_, cx| {
@@ -450,8 +504,8 @@ impl SearchPanel {
 }
 
 impl Focusable for SearchPanel {
-    fn focus_handle(&self, cx: &App) -> FocusHandle {
-        self.search_input.read(cx).focus_handle.clone()
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus_handle.clone()
     }
 }
 
@@ -466,6 +520,12 @@ impl Render for SearchPanel {
         if !allow_replace {
             self.replace_mode = false;
         }
+        #[cfg(feature = "test-support")]
+        {
+            let mut probe = self.probe.borrow_mut();
+            probe.controls.clear();
+            probe.bounds.clear();
+        }
 
         v_flex()
             .id("search-panel")
@@ -475,6 +535,7 @@ impl Render for SearchPanel {
             .on_action(cx.listener(Self::on_action_enter))
             .on_action(cx.listener(Self::on_action_escape))
             .on_action(cx.listener(Self::on_action_tab))
+            .on_action(cx.listener(Self::on_action_shift_tab))
             .font_family(cx.theme().font_family.clone())
             .items_center()
             .py_2()
@@ -491,14 +552,25 @@ impl Render for SearchPanel {
                     .gap_2()
                     .child(
                         div()
+                            .id("search-field-group")
                             .flex()
                             .flex_1()
                             .gap_1()
+                            .role(gpui::Role::Group)
+                            .aria_label(self.labels.search_field.clone())
                             .child(
                                 Input::new(&self.search_input)
                                     .focus_bordered(false)
                                     .suffix(
                                         Button::new("case-insensitive")
+                                            .map(|button| {
+                                                self.control(
+                                                    button,
+                                                    "case",
+                                                    self.labels.case_sensitive.clone(),
+                                                    Some(!self.case_insensitive),
+                                                )
+                                            })
                                             .selected(!self.case_insensitive)
                                             .xsmall()
                                             .compact()
@@ -524,6 +596,14 @@ impl Render for SearchPanel {
                     .when(allow_replace, |this| {
                         this.child(
                             Button::new("replace-mode")
+                                .map(|button| {
+                                    self.control(
+                                        button,
+                                        "mode",
+                                        self.labels.replace_mode.clone(),
+                                        Some(self.replace_mode),
+                                    )
+                                })
                                 .xsmall()
                                 .ghost()
                                 .icon(IconName::Replace)
@@ -549,6 +629,9 @@ impl Render for SearchPanel {
                     })
                     .child(
                         Button::new("prev")
+                            .map(|button| {
+                                self.control(button, "prev", self.labels.previous.clone(), None)
+                            })
                             .xsmall()
                             .ghost()
                             .icon(IconName::ChevronLeft)
@@ -559,6 +642,9 @@ impl Render for SearchPanel {
                     )
                     .child(
                         Button::new("next")
+                            .map(|button| {
+                                self.control(button, "next", self.labels.next.clone(), None)
+                            })
                             .xsmall()
                             .ghost()
                             .icon(IconName::ChevronRight)
@@ -578,6 +664,9 @@ impl Render for SearchPanel {
                     .child(div().w_7())
                     .child(
                         Button::new("close")
+                            .map(|button| {
+                                self.control(button, "close", self.labels.close.clone(), None)
+                            })
                             .xsmall()
                             .ghost()
                             .icon(IconName::Close)
@@ -589,8 +678,11 @@ impl Render for SearchPanel {
             .when(self.replace_mode && allow_replace, |this| {
                 this.child(
                     h_flex()
+                        .id("replacement-field-group")
                         .w_full()
                         .gap_2()
+                        .role(gpui::Role::Group)
+                        .aria_label(self.labels.replace_field.clone())
                         .child(
                             Input::new(&self.replace_input)
                                 .focus_bordered(false)
@@ -600,8 +692,16 @@ impl Render for SearchPanel {
                         )
                         .child(
                             Button::new("replace-one")
+                                .map(|button| {
+                                    self.control(
+                                        button,
+                                        "replace",
+                                        self.labels.replace.clone(),
+                                        None,
+                                    )
+                                })
                                 .small()
-                                .label(t!("Input.Replace"))
+                                .label(self.labels.replace.clone())
                                 .disabled(!has_matches)
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.replace_next(window, cx);
@@ -609,8 +709,16 @@ impl Render for SearchPanel {
                         )
                         .child(
                             Button::new("replace-all")
+                                .map(|button| {
+                                    self.control(
+                                        button,
+                                        "all",
+                                        self.labels.replace_all.clone(),
+                                        None,
+                                    )
+                                })
                                 .small()
-                                .label(t!("Input.Replace All"))
+                                .label(self.labels.replace_all.clone())
                                 .disabled(!has_matches)
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.replace_all(window, cx);
@@ -623,135 +731,5 @@ impl Render for SearchPanel {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_search() {
-        let mut matcher = SearchMatcher::new();
-        matcher.update(&Rope::from("Hello 世界 this is a Is test string."));
-        matcher.update_query("Is", true);
-
-        assert_eq!(matcher.len(), 3);
-        let mut matches = matcher.clone();
-        assert_eq!(matches.current_match_ix, 0);
-        assert_eq!(matches.next(), Some(18..20));
-        assert_eq!(matches.next(), Some(23..25));
-        assert_eq!(matches.current_match_ix, 2);
-        assert_eq!(matches.next(), Some(15..17));
-        assert_eq!(matches.current_match_ix, 0);
-        assert_eq!(matches.next_back(), Some(23..25));
-        assert_eq!(matches.current_match_ix, 2);
-        assert_eq!(matches.next_back(), Some(18..20));
-        assert_eq!(matches.current_match_ix, 1);
-        assert_eq!(matches.next_back(), Some(15..17));
-        assert_eq!(matches.current_match_ix, 0);
-        assert_eq!(matches.next_back(), Some(23..25));
-
-        matcher.update_query("IS", false);
-        assert_eq!(matcher.len(), 0);
-        assert_eq!(matcher.next(), None);
-        assert_eq!(matcher.next_back(), None);
-    }
-
-    #[test]
-    fn test_search_label() {
-        let mut matcher = SearchMatcher::new();
-        matcher.update(&Rope::from("Hello 世界 this is a Is test string."));
-        matcher.update_query("Is", true);
-        assert_eq!(matcher.label(), "1/3");
-        matcher.next();
-        assert_eq!(matcher.label(), "2/3");
-        matcher.next();
-        assert_eq!(matcher.label(), "3/3");
-        matcher.next();
-        assert_eq!(matcher.label(), "1/3");
-
-        matcher.update_query("IS", false);
-        assert_eq!(matcher.label(), "0/0");
-    }
-
-    #[test]
-    fn test_select_range_start() {
-        let mut matcher = SearchMatcher::new();
-        matcher.matched_ranges = Rc::new(vec![5..10, 15..20, 25..30]);
-        matcher.update_cursor_by_offset(0);
-        assert_eq!(matcher.current_match_ix, 0);
-
-        matcher.update_cursor_by_offset(5);
-        assert_eq!(matcher.current_match_ix, 0);
-
-        matcher.update_cursor_by_offset(12);
-        assert_eq!(matcher.current_match_ix, 1);
-
-        matcher.update_cursor_by_offset(16);
-        assert_eq!(matcher.current_match_ix, 1);
-
-        matcher.update_cursor_by_offset(30);
-        assert_eq!(matcher.current_match_ix, 2);
-
-        matcher.update_cursor_by_offset(31);
-        assert_eq!(matcher.current_match_ix, 2);
-    }
-
-    #[test]
-    fn test_next_scroll_direction_returns_down_without_wrap() {
-        assert!(matches!(
-            SearchPanel::next_scroll_direction(0, 1),
-            Some(MoveDirection::Down)
-        ));
-    }
-
-    #[test]
-    fn test_next_scroll_direction_returns_none_on_wrap() {
-        assert!(SearchPanel::next_scroll_direction(2, 0).is_none());
-    }
-
-    #[test]
-    fn test_next_scroll_direction_returns_none_for_single_match() {
-        assert!(SearchPanel::next_scroll_direction(0, 0).is_none());
-    }
-
-    #[test]
-    fn test_next_ix_wraps_to_start() {
-        let mut matcher = SearchMatcher::new();
-        matcher.matched_ranges = Rc::new(vec![5..10, 15..20, 25..30]);
-        matcher.current_match_ix = 2;
-
-        assert_eq!(matcher.next_ix(), Some(0));
-    }
-
-    #[test]
-    fn test_prev_scroll_direction_returns_up_without_wrap() {
-        assert!(matches!(
-            SearchPanel::prev_scroll_direction(2, 1),
-            Some(MoveDirection::Up)
-        ));
-    }
-
-    #[test]
-    fn test_prev_scroll_direction_returns_none_on_wrap() {
-        assert!(SearchPanel::prev_scroll_direction(0, 2).is_none());
-    }
-
-    #[test]
-    fn test_prev_scroll_direction_returns_none_for_single_match() {
-        assert!(SearchPanel::prev_scroll_direction(0, 0).is_none());
-    }
-
-    #[test]
-    fn test_update_matches_clamps_current_match_index_while_replacing() {
-        let mut matcher = SearchMatcher::new();
-        matcher.update(&Rope::from("foo foo foo"));
-        matcher.update_query("foo", true);
-        matcher.current_match_ix = 2;
-        matcher.replacing = true;
-
-        matcher.update(&Rope::from("foo xoo foo"));
-
-        assert_eq!(matcher.len(), 2);
-        assert_eq!(matcher.current_match_ix, 1);
-        assert_eq!(matcher.label(), "2/2");
-        assert!(!matcher.replacing);
-    }
-}
+#[path = "search_tests.rs"]
+mod tests;
