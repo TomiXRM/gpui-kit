@@ -406,6 +406,7 @@ pub struct InputState {
     /// its default mask when the user has not made an explicit choice.
     pub(super) mask_pattern_set: bool,
     pub(super) placeholder: SharedString,
+    pub(super) rendered_aria_label: Option<SharedString>,
 
     /// Popover
     diagnostic_popover: Option<Entity<DiagnosticPopover>>,
@@ -531,6 +532,7 @@ impl InputState {
             deferred_scroll_offset: None,
             preferred_column: None,
             placeholder: SharedString::default(),
+            rendered_aria_label: None,
             mask_pattern: MaskPattern::default(),
             mask_pattern_set: false,
             text_align: TextAlign::Left,
@@ -642,6 +644,13 @@ impl InputState {
     pub fn placeholder(mut self, placeholder: impl Into<SharedString>) -> Self {
         self.placeholder = placeholder.into();
         self
+    }
+
+    /// Accessible name assigned to the focusable node by the latest [`super::Input`] render.
+    ///
+    /// This reports renderer metadata, not a native accessibility-tree snapshot.
+    pub fn rendered_aria_label(&self) -> Option<SharedString> {
+        self.rendered_aria_label.clone()
     }
 
     /// Set enable/disable code folding, only for [`InputMode::CodeEditor`] mode.

@@ -34,6 +34,21 @@ let input = cx.new(|cx|
 Input::new(&input)
 ```
 
+### Accessible Name
+
+Give each input a localized, purpose-specific accessible name:
+
+```rust
+Input::new(&input).aria_label("Your name")
+```
+
+The name is optional by default and is assigned to the inner node that owns
+keyboard focus, not a container. The state's placeholder is also exposed as
+`aria_placeholder`; a placeholder is not a substitute for an accessible name.
+`InputState::rendered_aria_label()` reports the latest renderer assignment for
+deterministic tests, not the operating system's accessibility-tree delivery.
+
+
 ### With Default Value
 
 ```rust

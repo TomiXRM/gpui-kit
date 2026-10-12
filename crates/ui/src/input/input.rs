@@ -4,7 +4,8 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::{
     AnyElement, App, DefiniteLength, Edges, EdgesRefinement, Entity, Hsla, InteractiveElement as _,
     IntoElement, MouseButton, MouseDownEvent, ParentElement as _, Rems, RenderOnce, Role,
-    StatefulInteractiveElement as _, StyleRefinement, Styled, TextAlign, Window, div, px, relative,
+    SharedString, StatefulInteractiveElement as _, StyleRefinement, Styled, TextAlign, Window, div,
+    px, relative,
 };
 
 use crate::button::{Button, ButtonVariants as _};
@@ -19,6 +20,18 @@ use crate::{Sizable, StyleSized};
 use super::{
     InputContentType, InputState, content_type::sync_native_content_type, element::EditorScrollbar,
 };
+
+#[cfg(feature = "test-support")]
+thread_local! {
+    static RENDERED_INPUTS: std::cell::RefCell<Vec<gpui::WeakEntity<InputState>>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Drain observations of the real input renderer without retaining input entities.
+#[cfg(feature = "test-support")]
+pub fn take_rendered_inputs_for_test() -> Vec<gpui::WeakEntity<InputState>> {
+    RENDERED_INPUTS.with(|inputs| std::mem::take(&mut *inputs.borrow_mut()))
+}
 
 /// Returns `(background, foreground)` colors for input-like components.
 pub(crate) fn input_style(disabled: bool, cx: &App) -> (Hsla, Hsla) {
@@ -51,6 +64,7 @@ pub struct Input {
     selected: bool,
     content_type: Option<InputContentType>,
     role: Option<Role>,
+    aria_label: Option<SharedString>,
 
     /// An optional context menu builder to allow a custom context menu on the input.
     ///
@@ -96,6 +110,7 @@ impl Input {
             selected: false,
             content_type: None,
             role: None,
+            aria_label: None,
             context_menu_builder: None,
         }
     }
@@ -166,6 +181,12 @@ impl Input {
     /// If unset, the role is inferred from multi-line mode and content type.
     pub fn role(mut self, role: Role) -> Self {
         self.role = Some(role);
+        self
+    }
+
+    /// Set the accessible name on the focusable input itself.
+    pub fn aria_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.aria_label = Some(label.into());
         self
     }
 
@@ -348,12 +369,15 @@ impl RenderOnce for Input {
             state.context_menu_builder = self.context_menu_builder.clone();
             state.disabled = self.disabled;
             state.size = self.size;
+            state.rendered_aria_label = self.aria_label.clone();
 
             // Only for single line mode
             if state.mode.is_single_line() {
                 state.text_align = text_align;
             }
         });
+        #[cfg(feature = "test-support")]
+        RENDERED_INPUTS.with(|inputs| inputs.borrow_mut().push(self.state.downgrade()));
 
         let state = self.state.read(cx);
         let content_type = self.content_type;
@@ -396,6 +420,8 @@ impl RenderOnce for Input {
         div()
             .id(("input", self.state.entity_id()))
             .role(accessibility_role)
+            .when_some(self.aria_label, |this, label| this.aria_label(label))
+            .aria_placeholder(state.placeholder.clone())
             .flex()
             .key_context(crate::input::CONTEXT)
             .track_focus(&state.focus_handle.clone())
@@ -551,6 +577,30 @@ impl RenderOnce for Input {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui::AppContext as _;
+
+    #[gpui::test]
+    fn accessible_name_is_optional_and_accepts_localized_labels(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            let window = cx
+                .open_window(Default::default(), |window, cx| {
+                    cx.set_global(crate::theme::Theme::default());
+                    crate::input::init(cx);
+                    let state = cx.new(|cx| InputState::new(window, cx).placeholder("Search"));
+                    assert_eq!(Input::new(&state).aria_label, None);
+                    let input = Input::new(&state).aria_label("検索");
+                    assert_eq!(input.aria_label.as_deref(), Some("検索"));
+                    assert_eq!(state.read(cx).placeholder.as_ref(), "Search");
+                    assert_eq!(state.read(cx).rendered_aria_label(), None);
+                    cx.new(|cx| crate::Root::new(state, window, cx))
+                })
+                .unwrap();
+            window
+                .update(cx, |_, window, _| window.remove_window())
+                .unwrap();
+        });
+        cx.run_until_parked();
+    }
 
     #[test]
     fn content_types_map_to_accessibility_roles() {
