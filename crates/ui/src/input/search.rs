@@ -581,10 +581,9 @@ impl Render for SearchPanel {
                             .flex()
                             .flex_1()
                             .gap_1()
-                            .role(gpui::Role::Group)
-                            .aria_label(self.labels.search_field.clone())
                             .child(
                                 Input::new(&self.search_input)
+                                    .aria_label(self.labels.search_field.clone())
                                     .focus_bordered(false)
                                     .suffix(
                                         Button::new("case-insensitive")
@@ -706,10 +705,9 @@ impl Render for SearchPanel {
                         .id("replacement-field-group")
                         .w_full()
                         .gap_2()
-                        .role(gpui::Role::Group)
-                        .aria_label(self.labels.replace_field.clone())
                         .child(
                             Input::new(&self.replace_input)
+                                .aria_label(self.labels.replace_field.clone())
                                 .focus_bordered(false)
                                 .small()
                                 .w(self.input_width)

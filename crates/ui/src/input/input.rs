@@ -416,12 +416,16 @@ impl RenderOnce for Input {
             && state.text.len() > 0
             && state.mode.is_single_line();
         let has_suffix = suffix.is_some() || state.loading || self.mask_toggle || show_clear_button;
+        let expose_placeholder =
+            !state.placeholder.is_empty() && self.aria_label.as_ref() != Some(&state.placeholder);
 
         div()
             .id(("input", self.state.entity_id()))
             .role(accessibility_role)
             .when_some(self.aria_label, |this, label| this.aria_label(label))
-            .aria_placeholder(state.placeholder.clone())
+            .when(expose_placeholder, |this| {
+                this.aria_placeholder(state.placeholder.clone())
+            })
             .flex()
             .key_context(crate::input::CONTEXT)
             .track_focus(&state.focus_handle.clone())
