@@ -1,7 +1,9 @@
 use gpui::SharedString;
+use rust_i18n::t;
 
 /// Names and help text for the built-in Find/Replace controls.
-/// Hosts can supply their locale; the standalone component defaults to English.
+/// Hosts can supply their locale. Defaults preserve the component's existing
+/// localized replacement captions; the new icon names default to English.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SearchPanelLabels {
     pub previous: SharedString,
@@ -20,8 +22,8 @@ impl Default for SearchPanelLabels {
         Self {
             previous: "Previous match".into(),
             next: "Next match".into(),
-            replace: "Replace".into(),
-            replace_all: "Replace all".into(),
+            replace: t!("Input.Replace").into(),
+            replace_all: t!("Input.Replace All").into(),
             close: "Close".into(),
             case_sensitive: "Match case".into(),
             replace_mode: "Show replacement field".into(),
@@ -40,8 +42,11 @@ mod tests {
         let labels = SearchPanelLabels::default();
         assert_eq!(labels.previous.as_ref(), "Previous match");
         assert_eq!(labels.next.as_ref(), "Next match");
-        assert_eq!(labels.replace.as_ref(), "Replace");
-        assert_eq!(labels.replace_all.as_ref(), "Replace all");
+        assert_eq!(labels.replace.as_ref(), t!("Input.Replace").as_ref());
+        assert_eq!(
+            labels.replace_all.as_ref(),
+            t!("Input.Replace All").as_ref()
+        );
         assert_eq!(labels.close.as_ref(), "Close");
         assert_eq!(labels.case_sensitive.as_ref(), "Match case");
         assert_eq!(labels.replace_mode.as_ref(), "Show replacement field");

@@ -13,6 +13,7 @@ impl SearchPanel {
         name: SharedString,
         toggled: Option<bool>,
     ) -> Button {
+        let button = super::search_actions::contain_editor_actions(button);
         let button = button
             .role(Role::Button)
             .key_context("SearchPanelButton")

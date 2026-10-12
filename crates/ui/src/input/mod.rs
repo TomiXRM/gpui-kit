@@ -21,6 +21,7 @@ mod otp_input;
 pub(crate) mod popovers;
 mod rope_ext;
 mod search;
+mod search_actions;
 mod search_controls;
 mod search_labels;
 #[cfg(feature = "test-support")]

@@ -4,8 +4,8 @@ use std::{ops::Range, rc::Rc};
 use gpui::StatefulInteractiveElement as _;
 use gpui::{
     App, AppContext as _, Context, Empty, Entity, FocusHandle, Focusable, Half,
-    InteractiveElement as _, IntoElement, ParentElement as _, Pixels, Render, Styled, Subscription,
-    Window, actions, div, prelude::FluentBuilder as _,
+    InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Pixels, Render, Styled,
+    Subscription, Window, actions, div, prelude::FluentBuilder as _,
 };
 use ropey::Rope;
 
@@ -532,6 +532,31 @@ impl Render for SearchPanel {
             .occlude()
             .track_focus(&self.focus_handle(cx))
             .key_context(CONTEXT)
+            .map(super::search_actions::contain_editor_actions)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    // A field or Button prevents default to retain its own
+                    // focus/selection. Unclaimed padding belongs to Find, not
+                    // the non-Tab-stop container (regardless of listener order).
+                    if this.focus_handle.is_focused(window) || !window.default_prevented() {
+                        this.search_input.focus_handle(cx).focus(window, cx);
+                        window.prevent_default();
+                    }
+                    // The bar overlays an Input: never select code underneath it.
+                    cx.stop_propagation();
+                }),
+            )
+            .map(|this| {
+                #[cfg(feature = "test-support")]
+                let this = this.on_prepaint({
+                    let probe = self.probe.clone();
+                    move |bounds, _, _| {
+                        probe.borrow_mut().bounds.insert("panel", bounds);
+                    }
+                });
+                this
+            })
             .on_action(cx.listener(Self::on_action_enter))
             .on_action(cx.listener(Self::on_action_escape))
             .on_action(cx.listener(Self::on_action_tab))
