@@ -1,5 +1,5 @@
-use std::fmt::Debug;
 use instant::{Duration, Instant};
+use std::fmt::Debug;
 
 /// A HistoryItem represents a single change in the history.
 /// It must implement Clone and PartialEq to be used in the History.
@@ -76,6 +76,13 @@ where
     /// End grouping changes, this will allow the version to be incremented again.
     pub fn end_grouping(&mut self) {
         self.grouping = false;
+    }
+
+    /// Separate an explicit edit from preceding and subsequent timed groups.
+    pub(crate) fn new_group(&mut self) {
+        self.grouping = false;
+        self.version += 1;
+        self.last_changed_at = Instant::now();
     }
 
     /// Increment the version number if the last change was made more than `GROUP_INTERVAL` milliseconds ago.
@@ -206,6 +213,27 @@ mod tests {
         fn set_version(&mut self, version: usize) {
             self.version = version;
         }
+    }
+
+    #[test]
+    fn explicit_group_boundaries_override_the_typing_interval() {
+        let mut history = History::<TabIndex>::new().group_interval(Duration::from_secs(60));
+        history.push(0.into());
+        history.push(1.into());
+        history.start_grouping();
+        history.new_group();
+        history.push(2.into());
+        history.new_group();
+        history.push(3.into());
+        history.push(4.into());
+        assert_eq!(history.undo().unwrap().len(), 2);
+        let replacement = history.undo().unwrap();
+        assert_eq!(replacement.len(), 1);
+        assert_eq!(replacement[0].tab_index, 2);
+        assert_eq!(history.undo().unwrap().len(), 2);
+        assert_eq!(history.redo().unwrap().len(), 2);
+        assert_eq!(history.redo().unwrap()[0].tab_index, 2);
+        assert_eq!(history.redo().unwrap().len(), 2);
     }
 
     #[test]

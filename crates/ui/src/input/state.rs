@@ -842,13 +842,17 @@ impl InputState {
     ///
     /// Use this when programmatically replacing the full text but the
     /// user should still be able to undo the operation — e.g. formatting.
+    /// The replacement is its own undo group, never merged with recent typing
+    /// or the next edit, even within the input's typing-group interval.
     pub fn replace_all(
         &mut self,
         text: impl Into<SharedString>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.history.new_group();
         self.replace_text(text, window, cx);
+        self.history.new_group();
         self.reset_selection();
         self.reset_lsp_state();
         self.reset_scroll_to_start();
@@ -3829,6 +3833,39 @@ ORDER BY id
                 assert_eq!(state.value(), "second");
             });
         });
+    }
+
+    #[gpui::test]
+    fn test_replace_all_separates_recent_typing(cx: &mut TestAppContext) {
+        for multiline in [false, true] {
+            let input_view = InputView::build(cx, move |state| state.multi_line(multiline));
+            let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+            let input = input_view.input;
+            cx.update(|window, cx| {
+                input.update(cx, |state, cx| {
+                    // A long interval makes the oracle independent of CI load;
+                    // every edit below would otherwise be one typing group.
+                    state.history =
+                        History::new().group_interval(std::time::Duration::from_secs(60));
+                    state.set_value("earlier", window, cx);
+                    state.replace_text("handwritten 日本語", window, cx);
+                    state.replace_all("generated", window, cx);
+                    state.replace_text("later typing", window, cx);
+                    state.undo(&Undo, window, cx);
+                    assert_eq!(state.value(), "generated");
+                    state.undo(&Undo, window, cx);
+                    assert_eq!(state.value(), "handwritten 日本語");
+                    state.undo(&Undo, window, cx);
+                    assert_eq!(state.value(), "earlier");
+                    state.redo(&Redo, window, cx);
+                    assert_eq!(state.value(), "handwritten 日本語");
+                    state.redo(&Redo, window, cx);
+                    assert_eq!(state.value(), "generated");
+                    state.redo(&Redo, window, cx);
+                    assert_eq!(state.value(), "later typing");
+                });
+            });
+        }
     }
 
     /// `replace_all` on a code editor marks a pending update and resets LSP
