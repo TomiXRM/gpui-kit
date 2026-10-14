@@ -56,6 +56,7 @@ pub struct Input {
     height: Option<DefiniteLength>,
     appearance: bool,
     cleanable: bool,
+    clear_button_aria_label: Option<SharedString>,
     mask_toggle: bool,
     disabled: bool,
     bordered: bool,
@@ -102,6 +103,7 @@ impl Input {
             height: None,
             appearance: true,
             cleanable: false,
+            clear_button_aria_label: None,
             mask_toggle: false,
             disabled: false,
             bordered: true,
@@ -158,6 +160,12 @@ impl Input {
     /// Set whether to show the clear button when the input field is not empty, default is false.
     pub fn cleanable(mut self, cleanable: bool) -> Self {
         self.cleanable = cleanable;
+        self
+    }
+
+    /// Set the accessible action name of the optional clear button.
+    pub fn clear_button_aria_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.clear_button_aria_label = Some(label.into());
         self
     }
 
@@ -562,15 +570,21 @@ impl RenderOnce for Input {
                             this.child(Self::render_toggle_mask_button(&self.state, cx))
                         })
                         .when(show_clear_button, |this| {
-                            this.child(clear_button(cx).on_click({
-                                let state = self.state.clone();
-                                move |_, window, cx| {
-                                    state.update(cx, |state, cx| {
-                                        state.clean(window, cx);
-                                        state.focus(window, cx);
+                            this.child(
+                                clear_button(cx)
+                                    .when_some(self.clear_button_aria_label, |button, label| {
+                                        button.aria_label(label)
                                     })
-                                }
-                            }))
+                                    .on_click({
+                                        let state = self.state.clone();
+                                        move |_, window, cx| {
+                                            state.update(cx, |state, cx| {
+                                                state.clean(window, cx);
+                                                state.focus(window, cx);
+                                            })
+                                        }
+                                    }),
+                            )
                         })
                         .children(suffix),
                 )

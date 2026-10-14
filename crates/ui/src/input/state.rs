@@ -1715,6 +1715,7 @@ impl InputState {
 
         if self.ime_marked_range.is_some() {
             self.unmark_text(window, cx);
+            return; // IME cancellation must not also cancel the containing search.
         }
 
         if self.clean_on_escape {
