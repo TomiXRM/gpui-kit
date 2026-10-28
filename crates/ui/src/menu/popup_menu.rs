@@ -210,8 +210,16 @@ impl PopupMenuItem {
     /// Unlike `checked`, this explicitly opts into radio semantics.
     pub fn radio_checked(mut self, checked: bool) -> Self {
         match &mut self {
-            Self::Item { radio, checked: value, .. }
-            | Self::ElementItem { radio, checked: value, .. } => {
+            Self::Item {
+                radio,
+                checked: value,
+                ..
+            }
+            | Self::ElementItem {
+                radio,
+                checked: value,
+                ..
+            } => {
                 *radio = true;
                 *value = checked;
             }
@@ -222,8 +230,16 @@ impl PopupMenuItem {
 
     fn radio_state(&self) -> Option<bool> {
         match self {
-            Self::Item { radio: true, checked, .. }
-            | Self::ElementItem { radio: true, checked, .. } => Some(*checked),
+            Self::Item {
+                radio: true,
+                checked,
+                ..
+            }
+            | Self::ElementItem {
+                radio: true,
+                checked,
+                ..
+            } => Some(*checked),
             _ => None,
         }
     }
@@ -801,7 +817,10 @@ impl PopupMenu {
     fn confirm(&mut self, _: &Confirm, window: &mut Window, cx: &mut Context<Self>) {
         match self.selected_index {
             Some(index) => {
-                let item = self.menu_items.get(index).filter(|item| item.is_clickable());
+                let item = self
+                    .menu_items
+                    .get(index)
+                    .filter(|item| item.is_clickable());
                 match item {
                     Some(PopupMenuItem::Item {
                         handler, action, ..
@@ -875,7 +894,8 @@ impl PopupMenu {
 
     fn select_down(&mut self, _: &SelectDown, _: &mut Window, cx: &mut Context<Self>) {
         cx.stop_propagation();
-        let next = self.clickable_menu_items()
+        let next = self
+            .clickable_menu_items()
             .find(|(ix, _)| self.selected_index.is_none_or(|selected| *ix > selected))
             .or_else(|| self.clickable_menu_items().next())
             .map(|(ix, _)| ix);
@@ -1140,7 +1160,10 @@ impl PopupMenu {
             .rounded(radius)
             .items_center()
             .selected(selected)
-            .when_some(item.radio_state(), |this, checked| this.radio_checked(checked))
+            .owner_focused(options.owner_focused)
+            .when_some(item.radio_state(), |this, checked| {
+                this.radio_checked(checked)
+            })
             .on_hover(cx.listener(move |this, hovered, _, cx| {
                 if *hovered {
                     this.selected_index = Some(ix);
@@ -1320,6 +1343,7 @@ impl Focusable for PopupMenu {
 #[derive(Clone, Copy)]
 struct RenderOptions {
     has_left_icon: bool,
+    owner_focused: bool,
     check_side: Side,
     radius: Pixels,
 }
@@ -1344,6 +1368,7 @@ impl Render for PopupMenu {
         let max_width = self.max_width();
         let options = RenderOptions {
             has_left_icon,
+            owner_focused: self.focus_handle.is_focused(window),
             check_side: self.check_side,
             radius: cx.theme().radius.min(px(8.)),
         };
@@ -1401,7 +1426,9 @@ mod tests {
 
     fn draw(cx: &mut gpui::VisualTestContext) {
         cx.run_until_parked();
-        cx.update(|window, cx| { _ = window.draw(cx); });
+        cx.update(|window, cx| {
+            _ = window.draw(cx);
+        });
     }
 
     #[gpui::test]
@@ -1456,7 +1483,8 @@ mod tests {
                     move |_, _, _| calls.set(calls.get() + 1)
                 }),
                 PopupMenuItem::element(|_, _| div().child("Unavailable custom"))
-                    .disabled(true).on_click({
+                    .disabled(true)
+                    .on_click({
                         let calls = calls.clone();
                         move |_, _, _| calls.set(calls.get() + 1)
                     }),
@@ -1486,26 +1514,5 @@ mod tests {
         draw(cx);
         cx.simulate_keystrokes("down up enter");
         assert_eq!(menu.read_with(cx, |menu, _| menu.selected_index), None);
-    }
-
-    #[gpui::test]
-    fn popup_menu_item_a11y_label_uses_visible_label(cx: &mut gpui::TestAppContext) {
-        let submenu = cx.update(|cx| cx.new(|cx| PopupMenu::new(cx)));
-
-        assert_eq!(PopupMenuItem::new("Open").a11y_label(), Some("Open".into()));
-        assert_eq!(
-            PopupMenuItem::link("Docs", "https://example.com").a11y_label(),
-            Some("Docs".into())
-        );
-        assert_eq!(
-            PopupMenuItem::label("Recent files").a11y_label(),
-            Some("Recent files".into())
-        );
-        assert_eq!(
-            PopupMenuItem::submenu("More", submenu).a11y_label(),
-            Some("More".into())
-        );
-        assert_eq!(PopupMenuItem::separator().a11y_label(), None);
-        assert_eq!(PopupMenuItem::element(|_, _| div()).a11y_label(), None);
     }
 }

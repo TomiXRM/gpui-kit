@@ -14,6 +14,7 @@ pub(crate) struct MenuItemElement {
     style: StyleRefinement,
     disabled: bool,
     selected: bool,
+    owner_focused: bool,
     radio_checked: Option<bool>,
     on_click: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
     on_hover: Option<Box<dyn Fn(&bool, &mut Window, &mut App) + 'static>>,
@@ -31,6 +32,7 @@ impl MenuItemElement {
             style: StyleRefinement::default(),
             disabled: false,
             selected: false,
+            owner_focused: false,
             radio_checked: None,
             on_click: None,
             on_hover: None,
@@ -41,6 +43,12 @@ impl MenuItemElement {
     /// Set ListItem as the selected item style.
     pub(crate) fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
+        self
+    }
+
+    /// Only the menu holding keyboard focus may nominate an active descendant.
+    pub(crate) fn owner_focused(mut self, focused: bool) -> Self {
+        self.owner_focused = focused;
         self
     }
 
@@ -101,9 +109,17 @@ impl RenderOnce for MenuItemElement {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         h_flex()
             .id(self.id)
-            .role(if self.radio_checked.is_some() { Role::MenuItemRadio } else { Role::MenuItem })
+            .role(if self.radio_checked.is_some() {
+                Role::MenuItemRadio
+            } else {
+                Role::MenuItem
+            })
             .when_some(self.radio_checked, |this, checked| {
-                this.aria_toggled(if checked { Toggled::True } else { Toggled::False })
+                this.aria_toggled(if checked {
+                    Toggled::True
+                } else {
+                    Toggled::False
+                })
             })
             .when(self.disabled, |this| {
                 this.a11y_synthetic_children(|builder| {
@@ -112,7 +128,10 @@ impl RenderOnce for MenuItemElement {
             })
             .when_some(self.aria_label, |this, label| this.aria_label(label))
             .aria_selected(self.selected)
-            .when(self.selected && !self.disabled, |this| this.aria_active_descendant())
+            .when(
+                self.owner_focused && self.selected && !self.disabled,
+                |this| this.aria_active_descendant(),
+            )
             .group(&self.group_name)
             .gap_x_1()
             .py_1()
@@ -148,4 +167,3 @@ impl RenderOnce for MenuItemElement {
             .children(self.children)
     }
 }
-

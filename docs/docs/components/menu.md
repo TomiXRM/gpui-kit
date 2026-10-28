@@ -136,8 +136,10 @@ menu.item(
 ```
 
 Ordinary actions (including existing `checked` items) retain `MenuItem` semantics.
-Keyboard focus stays on the menu; its highlighted eligible item is reported as
-the active accessibility descendant.
+Keyboard focus stays on the menu; only the menu that actually owns keyboard focus
+reports its highlighted eligible item as the active accessibility descendant.
+Hovering an open child submenu does not steal the parent menu's accessibility
+focus; keyboard entry transfers that ownership to the child.
 
 ### Check state
 
