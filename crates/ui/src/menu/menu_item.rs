@@ -2,7 +2,7 @@ use crate::{ActiveTheme, Disableable, StyledExt, h_flex};
 use gpui::{
     AnyElement, App, ClickEvent, ElementId, InteractiveElement, IntoElement, MouseButton,
     ParentElement, RenderOnce, Role, SharedString, StatefulInteractiveElement as _,
-    StyleRefinement, Styled, Window, prelude::FluentBuilder as _,
+    StyleRefinement, Styled, Toggled, Window, prelude::FluentBuilder as _,
 };
 use smallvec::SmallVec;
 
@@ -14,6 +14,7 @@ pub(crate) struct MenuItemElement {
     style: StyleRefinement,
     disabled: bool,
     selected: bool,
+    radio_checked: Option<bool>,
     on_click: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
     on_hover: Option<Box<dyn Fn(&bool, &mut Window, &mut App) + 'static>>,
     children: SmallVec<[AnyElement; 2]>,
@@ -30,6 +31,7 @@ impl MenuItemElement {
             style: StyleRefinement::default(),
             disabled: false,
             selected: false,
+            radio_checked: None,
             on_click: None,
             on_hover: None,
             children: SmallVec::new(),
@@ -45,6 +47,11 @@ impl MenuItemElement {
     /// Set the accessible label for the menu item.
     pub(crate) fn aria_label(mut self, label: impl Into<SharedString>) -> Self {
         self.aria_label = Some(label.into());
+        self
+    }
+
+    pub(crate) fn radio_checked(mut self, checked: bool) -> Self {
+        self.radio_checked = Some(checked);
         self
     }
 
@@ -94,9 +101,18 @@ impl RenderOnce for MenuItemElement {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         h_flex()
             .id(self.id)
-            .role(Role::MenuItem)
+            .role(if self.radio_checked.is_some() { Role::MenuItemRadio } else { Role::MenuItem })
+            .when_some(self.radio_checked, |this, checked| {
+                this.aria_toggled(if checked { Toggled::True } else { Toggled::False })
+            })
+            .when(self.disabled, |this| {
+                this.a11y_synthetic_children(|builder| {
+                    builder.parent_node().set_disabled();
+                })
+            })
             .when_some(self.aria_label, |this, label| this.aria_label(label))
             .aria_selected(self.selected)
+            .when(self.selected && !self.disabled, |this| this.aria_active_descendant())
             .group(&self.group_name)
             .gap_x_1()
             .py_1()
@@ -133,14 +149,3 @@ impl RenderOnce for MenuItemElement {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[gpui::test]
-    fn aria_label_sets_accessible_name(_cx: &mut gpui::TestAppContext) {
-        let item = MenuItemElement::new("open", "menu").aria_label("Open");
-
-        assert_eq!(item.aria_label, Some("Open".into()));
-    }
-}

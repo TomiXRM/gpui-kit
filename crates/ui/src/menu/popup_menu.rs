@@ -39,6 +39,7 @@ pub enum PopupMenuItem {
         label: SharedString,
         disabled: bool,
         checked: bool,
+        radio: bool,
         is_link: bool,
         action: Option<Box<dyn Action>>,
         // For link item
@@ -49,6 +50,8 @@ pub enum PopupMenuItem {
         icon: Option<Icon>,
         disabled: bool,
         checked: bool,
+        radio: bool,
+        aria_label: Option<SharedString>,
         action: Option<Box<dyn Action>>,
         render: Box<dyn Fn(&mut Window, &mut App) -> AnyElement + 'static>,
         handler: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
@@ -74,6 +77,7 @@ impl PopupMenuItem {
             label: label.into(),
             disabled: false,
             checked: false,
+            radio: false,
             action: None,
             is_link: false,
             handler: None,
@@ -91,6 +95,8 @@ impl PopupMenuItem {
             icon: None,
             disabled: false,
             checked: false,
+            radio: false,
+            aria_label: None,
             action: None,
             render: Box::new(move |window, cx| builder(window, cx).into_any_element()),
             handler: None,
@@ -190,6 +196,38 @@ impl PopupMenuItem {
         self
     }
 
+    /// Give a custom element item its full accessible name, independent of its visual content.
+    pub fn aria_label(mut self, label: impl Into<SharedString>) -> Self {
+        if let Self::ElementItem { aria_label, .. } = &mut self {
+            *aria_label = Some(label.into());
+        }
+        self
+    }
+
+    /// Mark an ordinary or custom item as a mutually exclusive radio choice.
+    ///
+    /// Uses the existing check glyph and exposes MenuItemRadio with its checked state.
+    /// Unlike `checked`, this explicitly opts into radio semantics.
+    pub fn radio_checked(mut self, checked: bool) -> Self {
+        match &mut self {
+            Self::Item { radio, checked: value, .. }
+            | Self::ElementItem { radio, checked: value, .. } => {
+                *radio = true;
+                *value = checked;
+            }
+            _ => {}
+        }
+        self
+    }
+
+    fn radio_state(&self) -> Option<bool> {
+        match self {
+            Self::Item { radio: true, checked, .. }
+            | Self::ElementItem { radio: true, checked, .. } => Some(*checked),
+            _ => None,
+        }
+    }
+
     /// Add a click handler for the menu item.
     ///
     /// Only works for [`PopupMenuItem::Item`] and [`PopupMenuItem::ElementItem`].
@@ -218,6 +256,7 @@ impl PopupMenuItem {
             label: label.into(),
             disabled: false,
             checked: false,
+            radio: false,
             action: None,
             is_link: true,
             handler: Some(Rc::new(move |_, _, cx| cx.open_url(&href))),
@@ -274,7 +313,8 @@ impl PopupMenuItem {
             PopupMenuItem::Item { label, .. }
             | PopupMenuItem::Label(label)
             | PopupMenuItem::Submenu { label, .. } => Some(label.clone()),
-            PopupMenuItem::Separator | PopupMenuItem::ElementItem { .. } => None,
+            PopupMenuItem::ElementItem { aria_label, .. } => aria_label.clone(),
+            PopupMenuItem::Separator => None,
         }
     }
 }
@@ -761,7 +801,7 @@ impl PopupMenu {
     fn confirm(&mut self, _: &Confirm, window: &mut Window, cx: &mut Context<Self>) {
         match self.selected_index {
             Some(index) => {
-                let item = self.menu_items.get(index);
+                let item = self.menu_items.get(index).filter(|item| item.is_clickable());
                 match item {
                     Some(PopupMenuItem::Item {
                         handler, action, ..
@@ -828,27 +868,20 @@ impl PopupMenu {
         }
 
         let last_clickable_ix = self.clickable_menu_items().last().map(|(ix, _)| ix);
-        self.set_selected_index(last_clickable_ix.unwrap_or(0), cx);
+        if let Some(ix) = last_clickable_ix {
+            self.set_selected_index(ix, cx);
+        }
     }
 
     fn select_down(&mut self, _: &SelectDown, _: &mut Window, cx: &mut Context<Self>) {
         cx.stop_propagation();
-        let Some(ix) = self.selected_index else {
-            self.set_selected_index(0, cx);
-            return;
-        };
-
-        if let Some((next_ix, _)) = self
-            .menu_items
-            .iter()
-            .enumerate()
-            .find(|(i, item)| *i > ix && item.is_clickable())
-        {
-            self.set_selected_index(next_ix, cx);
-            return;
+        let next = self.clickable_menu_items()
+            .find(|(ix, _)| self.selected_index.is_none_or(|selected| *ix > selected))
+            .or_else(|| self.clickable_menu_items().next())
+            .map(|(ix, _)| ix);
+        if let Some(ix) = next {
+            self.set_selected_index(ix, cx);
         }
-
-        self.set_selected_index(0, cx);
     }
 
     fn select_left(&mut self, _: &SelectLeft, window: &mut Window, cx: &mut Context<Self>) {
@@ -1107,6 +1140,7 @@ impl PopupMenu {
             .rounded(radius)
             .items_center()
             .selected(selected)
+            .when_some(item.radio_state(), |this, checked| this.radio_checked(checked))
             .on_hover(cx.listener(move |this, hovered, _, cx| {
                 if *hovered {
                     this.selected_index = Some(ix);
@@ -1363,6 +1397,96 @@ impl Render for PopupMenu {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
+
+    fn draw(cx: &mut gpui::VisualTestContext) {
+        cx.run_until_parked();
+        cx.update(|window, cx| { _ = window.draw(cx); });
+    }
+
+    #[gpui::test]
+    fn popup_keyboard_skips_ineligible_first_and_wraps(cx: &mut gpui::TestAppContext) {
+        cx.update(crate::init);
+        let calls = Rc::new(Cell::new(0));
+        let (menu, cx) = cx.add_window_view(|window, cx| {
+            let mut menu = PopupMenu::new(cx);
+            menu.focus_handle.focus(window, cx);
+            menu.menu_items = vec![
+                PopupMenuItem::new("Unavailable").disabled(true).on_click({
+                    let calls = calls.clone();
+                    move |_, _, _| calls.set(calls.get() + 100)
+                }),
+                PopupMenuItem::separator(),
+                PopupMenuItem::label("Choices"),
+                PopupMenuItem::element(|_, _| div().child("First"))
+                    .aria_label("First choice")
+                    .radio_checked(true)
+                    .on_click({
+                        let calls = calls.clone();
+                        move |_, _, _| calls.set(calls.get() + 1)
+                    }),
+                PopupMenuItem::new("Last"),
+                PopupMenuItem::new("Unavailable tail").disabled(true),
+            ];
+            menu
+        });
+        draw(cx);
+        cx.simulate_keystrokes("down");
+        assert_eq!(menu.read_with(cx, |menu, _| menu.selected_index), Some(3));
+        cx.simulate_keystrokes("down");
+        assert_eq!(menu.read_with(cx, |menu, _| menu.selected_index), Some(4));
+        cx.simulate_keystrokes("down");
+        assert_eq!(menu.read_with(cx, |menu, _| menu.selected_index), Some(3));
+        cx.simulate_keystrokes("up");
+        assert_eq!(menu.read_with(cx, |menu, _| menu.selected_index), Some(4));
+        cx.simulate_keystrokes("down enter");
+        assert_eq!(calls.get(), 1);
+    }
+
+    #[gpui::test]
+    fn popup_keyboard_cannot_confirm_disabled_or_all_disabled(cx: &mut gpui::TestAppContext) {
+        cx.update(crate::init);
+        let calls = Rc::new(Cell::new(0));
+        let (menu, cx) = cx.add_window_view(|window, cx| {
+            let mut menu = PopupMenu::new(cx);
+            menu.focus_handle.focus(window, cx);
+            menu.menu_items = vec![
+                PopupMenuItem::new("Unavailable").disabled(true).on_click({
+                    let calls = calls.clone();
+                    move |_, _, _| calls.set(calls.get() + 1)
+                }),
+                PopupMenuItem::element(|_, _| div().child("Unavailable custom"))
+                    .disabled(true).on_click({
+                        let calls = calls.clone();
+                        move |_, _, _| calls.set(calls.get() + 1)
+                    }),
+                PopupMenuItem::label("Heading"),
+                PopupMenuItem::separator(),
+            ];
+            menu
+        });
+        draw(cx);
+        cx.simulate_keystrokes("down up enter");
+        assert_eq!(menu.read_with(cx, |menu, _| menu.selected_index), None);
+        for ix in [0, 1] {
+            // Hover can leave a disabled row selected; Enter must still reject it.
+            menu.update(cx, |menu, cx| {
+                menu.selected_index = Some(ix);
+                cx.notify();
+            });
+            draw(cx);
+            cx.simulate_keystrokes("enter");
+        }
+        assert_eq!(calls.get(), 0);
+        menu.update(cx, |menu, cx| {
+            menu.menu_items.clear();
+            menu.selected_index = None;
+            cx.notify();
+        });
+        draw(cx);
+        cx.simulate_keystrokes("down up enter");
+        assert_eq!(menu.read_with(cx, |menu, _| menu.selected_index), None);
+    }
 
     #[gpui::test]
     fn popup_menu_item_a11y_label_uses_visible_label(cx: &mut gpui::TestAppContext) {

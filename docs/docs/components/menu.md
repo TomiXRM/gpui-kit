@@ -117,6 +117,28 @@ menu.menu("Available Action", Box::new(Action1))
     )
 ```
 
+Disabled items expose their disabled state to assistive technology and cannot be
+confirmed with Enter. Up/Down skip disabled items, labels and separators, including
+on the first key press and wraparound; menus with no eligible items remain inert.
+
+For mutually exclusive choices, explicitly use `radio_checked` rather than
+`checked`. It preserves the check glyph while exposing a `MenuItemRadio` and
+checked state. Custom elements can supply their full accessible name independently
+of truncated or wrapped visual text:
+
+```rust
+menu.item(
+    PopupMenuItem::element(|_, _| div().child("System…"))
+        .aria_label("System appearance")
+        .radio_checked(true)
+        .action(Box::new(UseSystemAppearance)),
+)
+```
+
+Ordinary actions (including existing `checked` items) retain `MenuItem` semantics.
+Keyboard focus stays on the menu; its highlighted eligible item is reported as
+the active accessibility descendant.
+
 ### Check state
 
 Create menu items that show a check state:
