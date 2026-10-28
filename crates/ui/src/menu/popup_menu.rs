@@ -1208,6 +1208,7 @@ impl PopupMenu {
                 .child(
                     h_flex()
                         .flex_1()
+                        .min_w_0()
                         .min_h(item_height)
                         .items_center()
                         .gap_x_1()
@@ -1429,6 +1430,67 @@ mod tests {
         cx.update(|window, cx| {
             _ = window.draw(cx);
         });
+    }
+
+    #[gpui::test]
+    fn popup_custom_long_label_fits_menu_with_either_check_side(cx: &mut gpui::TestAppContext) {
+        cx.update(crate::init);
+        let (menu, cx) = cx.add_window_view(|_, cx| {
+            PopupMenu::new(cx).max_w(px(280.)).item(
+                PopupMenuItem::element(|_, _| {
+                    div()
+                        .min_w_0()
+                        .flex_1()
+                        .debug_selector(|| "custom-label".to_string())
+                        .child(
+                            div().text_ellipsis().child(
+                                "provider/model-with-a-very-long-unbroken-identifier-that-must-not-escape-the-popup-menu",
+                            ),
+                        )
+                })
+                .radio_checked(false),
+            )
+        });
+        for side in [Side::Left, Side::Right] {
+            let mut unchecked_width = None;
+            for checked in [false, true] {
+                menu.update(cx, |menu, cx| {
+                    menu.check_side = side;
+                    if let PopupMenuItem::ElementItem { checked: value, .. } =
+                        &mut menu.menu_items[0]
+                    {
+                        *value = checked;
+                    }
+                    cx.notify();
+                });
+                draw(cx);
+                let bounds = menu.read_with(cx, |menu, _| menu.bounds);
+                let label = cx
+                    .debug_bounds("custom-label")
+                    .expect("rendered custom label");
+                assert!(
+                    bounds.size.width <= px(280.),
+                    "actual menu must honor its maximum width"
+                );
+                assert!(label.size.width > px(0.), "label must retain usable space");
+                assert!(
+                    label.left() >= bounds.left() + px(8.),
+                    "label must retain menu padding"
+                );
+                assert!(
+                    label.right() <= bounds.right() - px(8.),
+                    "custom label escapes actual menu: side={side:?}, checked={checked}, label={label:?}, menu={bounds:?}",
+                );
+                if checked {
+                    assert!(
+                        label.size.width < unchecked_width.unwrap(),
+                        "the real check content must reserve space rather than overlap the label",
+                    );
+                } else {
+                    unchecked_width = Some(label.size.width);
+                }
+            }
+        }
     }
 
     #[gpui::test]

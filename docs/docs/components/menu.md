@@ -135,6 +135,10 @@ menu.item(
 )
 ```
 
+The custom-content row can shrink within the menu's maximum width while reserving
+space for left or right check marks. For long labels, give the custom content
+`min_w_0().flex_1()` and choose wrapping or ellipsis on its text child.
+
 Ordinary actions (including existing `checked` items) retain `MenuItem` semantics.
 Keyboard focus stays on the menu; only the menu that actually owns keyboard focus
 reports its highlighted eligible item as the active accessibility descendant.
